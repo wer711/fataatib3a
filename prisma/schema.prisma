@@ -1,0 +1,33 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Order {
+  id              String   @id @default(cuid())
+  orderNumber     String   @unique
+  fullName        String
+  phone           String
+  printFileName   String?
+  printFilePath   String?
+  pageCount       Int      @default(10)
+  paperSize       String   @default("A4 - قياسي")
+  printSide       String   @default("وجه واحد فقط")
+  copies          Int      @default(1)
+  colorType       String   @default("أسود وأبيض")
+  bindingType     String   @default("بدون تغليف")
+  payMethod       String   @default("")
+  receiptFileName String?
+  receiptFilePath String?
+  deliveryMethod  String   @default("استلام من المكتبة")
+  address         String?
+  notes           String?
+  totalPrice      Int      @default(0)
+  status          String   @default("جديد")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
