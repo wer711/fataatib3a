@@ -2,19 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 
 // ─── Configuration ──────────────────────────────────────────
-const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15MB limit for file uploads
-
-// Google Sheets Integration
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL || "";
 const SHEET_SECRET_TOKEN = process.env.SHEET_SECRET_TOKEN || "ffc0b9b5959d4a9149eed95327b88f02b1c6ee8b64a723d2";
 
-// ─── Database helper (optional — works with or without Prisma) ──
+// ─── Database helper ────────────────────────────────────────
 async function saveToDatabase(data: {
   orderNumber: string;
   fullName: string;
   phone: string;
   printFileName: string | null;
-  printFileIdentifier: string | null;
   pageCount: number;
   paperSize: string;
   printSide: string;
@@ -23,7 +19,6 @@ async function saveToDatabase(data: {
   bindingType: string;
   payMethod: string;
   receiptFileName: string | null;
-  receiptFileIdentifier: string | null;
   deliveryMethod: string;
   address: string | null;
   notes: string | null;
@@ -37,7 +32,6 @@ async function saveToDatabase(data: {
         fullName: data.fullName,
         phone: data.phone,
         printFileName: data.printFileName,
-        printFilePath: data.printFileIdentifier,
         pageCount: data.pageCount,
         paperSize: data.paperSize,
         printSide: data.printSide,
@@ -46,7 +40,6 @@ async function saveToDatabase(data: {
         bindingType: data.bindingType,
         payMethod: data.payMethod,
         receiptFileName: data.receiptFileName,
-        receiptFilePath: data.receiptFileIdentifier,
         deliveryMethod: data.deliveryMethod,
         address: data.address,
         notes: data.notes,
@@ -54,23 +47,22 @@ async function saveToDatabase(data: {
         status: "جديد",
       },
     });
-    console.log(`✅ Order ${data.orderNumber} saved to local DB — Total: ${data.totalPrice} د.ج`);
+    console.log(`✅ Order ${data.orderNumber} saved to local DB`);
     return true;
   } catch (dbError) {
-    // قاعدة البيانات المحلية غير متوفرة (مثلاً على Netlify) — لا مشكلة
     console.log(`⚠️ Local DB not available, order ${data.orderNumber} saved to Google Sheets only`);
     return false;
   }
 }
 
-// ─── Simple Rate Limiter ─────────────────────────────────────
+// ─── Rate Limiter ───────────────────────────────────────────
 interface RateLimitEntry {
   timestamps: number[];
 }
 
 const rateLimitMap = new Map<string, RateLimitEntry>();
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
-const RATE_LIMIT_MAX = 10; // 10 requests per minute
+const RATE_LIMIT_WINDOW = 60 * 1000;
+const RATE_LIMIT_MAX = 10;
 
 function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
   const now = Date.now();
@@ -98,7 +90,7 @@ function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
   return { allowed: true };
 }
 
-// ─── Pricing Configuration ──────────────────────────────────
+// ─── Pricing ────────────────────────────────────────────────
 const PRICING = {
   basePrice: { bank: 7, cash: 10 },
   paperSize: { "A5 - صغير": 0.6, "A4 - قياسي": 1, "A3 - كبير": 2 },
@@ -134,8 +126,7 @@ function calculateTotalPrice(data: {
   }
 
   const bindingCost =
-    (PRICING.binding[data.bindingType as keyof typeof PRICING.binding] || 0) *
-    data.copies;
+    (PRICING.binding[data.bindingType as keyof typeof PRICING.binding] || 0) * data.copies;
   const deliveryCost =
     PRICING.delivery[data.deliveryMethod as keyof typeof PRICING.delivery] || 0;
 
@@ -160,50 +151,15 @@ function sanitize(input: string): string {
     .slice(0, 500);
 }
 
-function sanitizeInt(value: string | null, defaultValue: number, min: number = 1): number {
+function sanitizeInt(value: string | number | null, defaultValue: number, min: number = 1): number {
   if (!value) return defaultValue;
-  const parsed = parseInt(value, 10);
+  const parsed = parseInt(String(value), 10);
   if (isNaN(parsed) || parsed < min) return defaultValue;
   return parsed;
 }
 
-// ─── File Processing (IN-MEMORY ONLY — no filesystem writes) ──
-async function processFile(
-  file: File,
-  prefix: string
-): Promise<{
-  fileName: string;
-  fileIdentifier: string;
-  base64Data: string;
-  mimeType: string;
-  fileSize: number;
-}> {
-  if (file.size > MAX_FILE_SIZE) {
-    throw new Error(`حجم الملف "${file.name}" أكبر من الحد المسموح (15MB)`);
-  }
-
-  // Read file into memory buffer (no disk writes)
-  const buffer = Buffer.from(await file.arrayBuffer());
-  const safeName = file.name.replace(/[^\w\u0600-\u06FF.\-() ]/g, "").slice(0, 200) || "upload.bin";
-
-  const ext = safeName.includes(".") ? "." + safeName.split(".").pop() : ".bin";
-  const uniqueIdentifier = `${prefix}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}${ext}`;
-
-  const base64Data = buffer.toString("base64");
-
-  return {
-    fileName: safeName,
-    fileIdentifier: uniqueIdentifier,
-    base64Data,
-    mimeType: file.type || "application/octet-stream",
-    fileSize: file.size,
-  };
-}
-
-// ─── Google Sheets + Drive Integration ──────────────────────
-// ⚡ OPTIMIZED: Truly fire-and-forget — user gets response immediately
-// Google sync continues in background, user doesn't wait for it
-async function sendToGoogleSheet(data: {
+// ─── Google Sheets Integration — Save Order (metadata only) ──
+async function saveOrderToSheet(data: {
   orderNumber: string;
   fullName: string;
   phone: string;
@@ -216,16 +172,12 @@ async function sendToGoogleSheet(data: {
   payMethod: string;
   totalPrice: number;
   printFileName: string | null;
-  printFileData: string | null;
-  printFileMime: string | null;
   receiptFileName: string | null;
-  receiptFileData: string | null;
-  receiptFileMime: string | null;
   deliveryMethod: string;
   address: string;
   notes: string;
   status: string;
-}): Promise<{ success: boolean; driveLinks?: { printFileUrl?: string; receiptFileUrl?: string } }> {
+}): Promise<{ success: boolean; sheetRow?: number }> {
   if (!GOOGLE_SCRIPT_URL) {
     console.log("⚠️ GOOGLE_SCRIPT_URL not configured, skipping Google Sheets sync");
     return { success: false };
@@ -245,28 +197,24 @@ async function sendToGoogleSheet(data: {
       payMethod: data.payMethod,
       totalPrice: data.totalPrice,
       printFileName: data.printFileName,
-      printFileData: data.printFileData,
-      printFileMime: data.printFileMime,
       receiptFileName: data.receiptFileName,
-      receiptFileData: data.receiptFileData,
-      receiptFileMime: data.receiptFileMime,
       deliveryMethod: data.deliveryMethod,
       address: data.address,
       notes: data.notes,
       status: data.status,
-      saveToDrive: "true",
     };
 
     const payload = {
       _token: SHEET_SECRET_TOKEN,
+      action: "saveOrder",
       data: payloadData,
     };
 
     const body = JSON.stringify(payload);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90000);
+    const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout for metadata
 
-    console.log(`📤 Sending order ${data.orderNumber} to Google Sheet (payload: ${(body.length / 1024).toFixed(0)}KB)...`);
+    console.log(`📤 Saving order ${data.orderNumber} metadata to Google Sheet...`);
 
     const firstRes = await fetch(GOOGLE_SCRIPT_URL, {
       method: "POST",
@@ -276,34 +224,28 @@ async function sendToGoogleSheet(data: {
       signal: controller.signal,
     });
 
-    // Google Apps Script redirects POST requests — follow the redirect
+    // Handle GAS redirect
     if (firstRes.status === 301 || firstRes.status === 302 || firstRes.status === 303) {
       const redirectUrl = firstRes.headers.get("location");
       if (redirectUrl) {
         console.log(`🔄 Google Script redirect detected, following...`);
-
         const secondRes = await fetch(redirectUrl, {
           method: "GET",
           redirect: "follow",
           signal: controller.signal,
         });
-
         clearTimeout(timeout);
 
         if (secondRes.ok) {
           const result = await secondRes.json();
           if (result.status === "success") {
-            console.log(`✅ Order synced to Google Sheet:`, data.orderNumber);
-            if (result.driveLinks) {
-              console.log(`📁 Drive links:`, JSON.stringify(result.driveLinks));
-            }
-            return { success: true, driveLinks: result.driveLinks };
+            console.log(`✅ Order metadata synced to Google Sheet: ${data.orderNumber}`);
+            return { success: true, sheetRow: result.row };
           } else {
             console.error(`❌ Google Sheet sync failed:`, result.message);
             return { success: false };
           }
         }
-
         console.error(`❌ Google Sheet redirect fetch failed:`, secondRes.status);
         return { success: false };
       }
@@ -314,11 +256,8 @@ async function sendToGoogleSheet(data: {
     if (firstRes.ok) {
       const result = await firstRes.json();
       if (result.status === "success") {
-        console.log(`✅ Order synced to Google Sheet:`, data.orderNumber);
-        if (result.driveLinks) {
-          console.log(`📁 Drive links:`, JSON.stringify(result.driveLinks));
-        }
-        return { success: true, driveLinks: result.driveLinks };
+        console.log(`✅ Order metadata synced to Google Sheet: ${data.orderNumber}`);
+        return { success: true, sheetRow: result.row };
       } else {
         console.error(`❌ Google Sheet sync failed:`, result.message);
         return { success: false };
@@ -333,7 +272,7 @@ async function sendToGoogleSheet(data: {
   }
 }
 
-// ─── POST Handler ───────────────────────────────────────────
+// ─── POST Handler — JSON metadata only (NO FILES) ───────────
 export async function POST(request: NextRequest) {
   try {
     // 1. Rate limiting
@@ -347,22 +286,32 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 2. Parse form data
-    const formData = await request.formData();
+    // 2. Parse JSON body (metadata only — no files)
+    let body: Record<string, unknown>;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        { error: "بيانات غير صالحة" },
+        { status: 400 }
+      );
+    }
 
     // 3. Extract and sanitize text fields
-    const fullName = sanitize((formData.get("fullName") as string) || "");
-    const phone = sanitize((formData.get("phone") as string) || "");
-    const pageCount = sanitizeInt(formData.get("pageCount") as string, 10);
-    const paperSize = sanitize((formData.get("paperSize") as string) || "A4 - قياسي");
-    const printSide = sanitize((formData.get("printSide") as string) || "وجه واحد فقط");
-    const copies = sanitizeInt(formData.get("copies") as string, 1);
-    const colorType = sanitize((formData.get("colorType") as string) || "أسود وأبيض");
-    const bindingType = sanitize((formData.get("bindingType") as string) || "بدون تغليف");
-    const payMethod = sanitize((formData.get("payMethod") as string) || "");
-    const deliveryMethod = sanitize((formData.get("deliveryMethod") as string) || "استلام من المكتبة");
-    const address = sanitize((formData.get("address") as string) || "");
-    const notes = sanitize((formData.get("notes") as string) || "");
+    const fullName = sanitize(String(body.fullName || ""));
+    const phone = sanitize(String(body.phone || ""));
+    const pageCount = sanitizeInt(body.pageCount as string | number | null, 10);
+    const paperSize = sanitize(String(body.paperSize || "A4 - قياسي"));
+    const printSide = sanitize(String(body.printSide || "وجه واحد فقط"));
+    const copies = sanitizeInt(body.copies as string | number | null, 1);
+    const colorType = sanitize(String(body.colorType || "أسود وأبيض"));
+    const bindingType = sanitize(String(body.bindingType || "بدون تغليف"));
+    const payMethod = sanitize(String(body.payMethod || ""));
+    const deliveryMethod = sanitize(String(body.deliveryMethod || "استلام من المكتبة"));
+    const address = sanitize(String(body.address || ""));
+    const notes = sanitize(String(body.notes || ""));
+    const printFileName = body.printFileName ? sanitize(String(body.printFileName)) : null;
+    const receiptFileName = body.receiptFileName ? sanitize(String(body.receiptFileName)) : null;
 
     console.log(`[Order] New order from: ${fullName}, phone: ${phone.slice(-4).padStart(phone.length, "*")}`);
 
@@ -381,45 +330,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "الرجاء اختيار طريقة الدفع" }, { status: 400 });
     }
 
-    // 5. Handle file uploads (IN-MEMORY ONLY)
-    const printFile = formData.get("printFile") as File | null;
-    const receiptFile = formData.get("receiptFile") as File | null;
-
-    let printFileName: string | null = null;
-    let printFileIdentifier: string | null = null;
-    let printFileBase64: string | null = null;
-    let printFileMime: string | null = null;
-    let receiptFileName: string | null = null;
-    let receiptFileIdentifier: string | null = null;
-    let receiptFileBase64: string | null = null;
-    let receiptFileMime: string | null = null;
-
-    if (printFile && printFile.size > 0) {
-      const processed = await processFile(printFile, "print");
-      printFileName = processed.fileName;
-      printFileIdentifier = processed.fileIdentifier;
-      printFileBase64 = processed.base64Data;
-      printFileMime = processed.mimeType;
-      console.log(`📎 Print file processed: ${processed.fileName} (${(processed.fileSize / 1024).toFixed(0)}KB)`);
-    }
-
-    if (payMethod !== "الدفع عند الاستلام") {
-      if (!receiptFile || receiptFile.size === 0) {
-        return NextResponse.json({ error: "الرجاء رفع صورة وصل التحويل" }, { status: 400 });
-      }
-      const processed = await processFile(receiptFile, "receipt");
-      receiptFileName = processed.fileName;
-      receiptFileIdentifier = processed.fileIdentifier;
-      receiptFileBase64 = processed.base64Data;
-      receiptFileMime = processed.mimeType;
-      console.log(`📎 Receipt file processed: ${processed.fileName} (${(processed.fileSize / 1024).toFixed(0)}KB)`);
-    }
-
-    if (deliveryMethod === "توصيل للمنزل" && !address) {
-      return NextResponse.json({ error: "الرجاء إدخال عنوان التوصيل" }, { status: 400 });
-    }
-
-    // 6. Calculate price
+    // 5. Calculate price
     const totalPrice = calculateTotalPrice({
       pageCount,
       copies,
@@ -431,16 +342,15 @@ export async function POST(request: NextRequest) {
       deliveryMethod,
     });
 
-    // 7. Generate order number
+    // 6. Generate order number
     const orderNumber = generateOrderNumber();
 
-    // 8. Save to local database (optional — gracefully skips if DB not available on Netlify)
+    // 7. Save to local database (optional — gracefully skips if DB not available)
     await saveToDatabase({
       orderNumber,
       fullName,
       phone: phoneClean,
       printFileName,
-      printFileIdentifier,
       pageCount,
       paperSize,
       printSide,
@@ -449,66 +359,56 @@ export async function POST(request: NextRequest) {
       bindingType,
       payMethod,
       receiptFileName,
-      receiptFileIdentifier,
       deliveryMethod,
       address: address || null,
       notes: notes || null,
       totalPrice,
     });
 
-    // 9. Send to Google Sheets + Drive
-    // ⚡ SPEED OPTIMIZATION: Truly fire-and-forget!
-    // We respond to the user IMMEDIATELY without waiting for Google
-    // Google sync continues in the background
-    // This makes the form submission feel instant to the user
-    const googleSheetData = {
-      orderNumber,
-      fullName,
-      phone: phoneClean,
-      pageCount,
-      paperSize,
-      printSide,
-      copies,
-      colorType,
-      bindingType,
-      payMethod,
-      totalPrice,
-      printFileName,
-      printFileData: printFileBase64,
-      printFileMime,
-      receiptFileName,
-      receiptFileData: receiptFileBase64,
-      receiptFileMime,
-      deliveryMethod,
-      address,
-      notes,
-      status: "جديد",
-    };
-
-    // Fire-and-forget: start the sync but don't await it
-    // The user gets their response immediately
+    // 8. Send metadata to Google Sheets (AWAIT — not fire-and-forget!)
+    // This is fast (~3-5s) since it's just metadata, no files
+    let sheetSynced = false;
     if (GOOGLE_SCRIPT_URL) {
-      // Start the Google sync in background — do NOT await
-      sendToGoogleSheet(googleSheetData).then((result) => {
-        if (result.success) {
-          console.log(`✅ [Background] Order ${orderNumber} synced to Google Sheet`);
-        } else {
-          console.log(`⚠️ [Background] Order ${orderNumber} Google sync had issues (data is saved in local DB)`);
-        }
-      }).catch((err) => {
-        console.error(`❌ [Background] Order ${orderNumber} Google sync error:`, err);
+      const sheetResult = await saveOrderToSheet({
+        orderNumber,
+        fullName,
+        phone: phoneClean,
+        pageCount,
+        paperSize,
+        printSide,
+        copies,
+        colorType,
+        bindingType,
+        payMethod,
+        totalPrice,
+        printFileName,
+        receiptFileName,
+        deliveryMethod,
+        address,
+        notes,
+        status: "جديد",
       });
+      sheetSynced = sheetResult.success;
     } else {
       console.log("⚠️ GOOGLE_SCRIPT_URL not configured — order saved to local DB only");
     }
 
-    // Respond to user IMMEDIATELY — no waiting for Google
+    // 9. Determine which files need to be uploaded
+    const hasPrintFile = !!body.hasPrintFile;
+    const hasReceiptFile = !!body.hasReceiptFile;
+
+    // 10. Respond with order number and file upload instructions
     return NextResponse.json({
       status: "success",
       order: {
         orderNumber,
         totalPrice,
         createdAt: new Date().toISOString(),
+        sheetSynced,
+      },
+      pendingFiles: {
+        printFile: hasPrintFile,
+        receiptFile: hasReceiptFile,
       },
     });
   } catch (error) {
@@ -516,11 +416,7 @@ export async function POST(request: NextRequest) {
 
     let message = "حدث خطأ غير متوقع";
     if (error instanceof Error) {
-      if (error.message.includes("EROFS") || error.message.includes("read-only")) {
-        message = "خطأ في حفظ الملف. يرجى المحاولة مرة أخرى.";
-      } else if (error.message.includes("ENOENT") || error.message.includes("no such file")) {
-        message = "خطأ في قراءة الملف. يرجى المحاولة مرة أخرى.";
-      } else if (error.message.includes("حجم الملف")) {
+      if (error.message.includes("حجم الملف")) {
         message = error.message;
       } else {
         message = "حدث خطأ في معالجة الطلب. يرجى المحاولة لاحقاً.";

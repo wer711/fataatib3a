@@ -26,6 +26,9 @@ import {
   StickyNote,
   CloudUpload,
   Check,
+  Copy,
+  ClipboardCheck,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -74,9 +77,9 @@ interface UploadProgress {
 }
 
 const PROGRESS_STAGES = [
-  { label: "تحضير الملفات", icon: FileCheck },
-  { label: "رفع الملفات", icon: CloudUpload },
-  { label: "معالجة الطلب", icon: Loader2 },
+  { label: "حفظ البيانات", icon: FileCheck },
+  { label: "رفع ملف الطباعة", icon: CloudUpload },
+  { label: "رفع الوصل", icon: CloudUpload },
   { label: "تم", icon: CheckCircle2 },
 ];
 
@@ -115,6 +118,8 @@ export default function OrderPage() {
   const [errorDialog, setErrorDialog] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [orderNumber, setOrderNumber] = useState("");
+  const [orderTotalPrice, setOrderTotalPrice] = useState<number>(0);
+  const [copied, setCopied] = useState(false);
   const printFileRef = useRef<HTMLInputElement>(null);
   const receiptFileRef = useRef<HTMLInputElement>(null);
 
@@ -211,7 +216,27 @@ export default function OrderPage() {
     [updateField]
   );
 
-  // ─── Submit with progress ────────────────────────────────
+  // ─── Copy Order Number ────────────────────────────────────
+  const copyOrderNumber = useCallback(async () => {
+    if (!orderNumber) return;
+    try {
+      await navigator.clipboard.writeText(orderNumber);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // fallback
+      const textArea = document.createElement("textarea");
+      textArea.value = orderNumber;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  }, [orderNumber]);
+
+  // ─── Submit with multi-step progress ──────────────────────
   const handleSubmit = useCallback(async () => {
     if (!validateStep(3)) return;
 
@@ -223,90 +248,41 @@ export default function OrderPage() {
     }
 
     setIsSubmitting(true);
-    setUploadProgress({ percent: 0, stage: "جاري تحضير الملفات...", stageIndex: 0 });
+    setUploadProgress({ percent: 5, stage: "جاري حفظ بيانات الطلب...", stageIndex: 0 });
 
     try {
-      const formData = new FormData();
-      formData.append("fullName", form.fullName.trim());
-      formData.append("phone", form.phone.trim());
-      formData.append("pageCount", form.pageCount.toString());
-      formData.append("paperSize", form.paperSize);
-      formData.append("printSide", form.printSide);
-      formData.append("copies", form.copies.toString());
-      formData.append("colorType", form.colorType);
-      formData.append("bindingType", form.bindingType);
-      formData.append("payMethod", form.payMethod);
-      formData.append("deliveryMethod", form.deliveryMethod);
-      if (form.address.trim()) formData.append("address", form.address.trim());
-      if (form.notes.trim()) formData.append("notes", form.notes.trim());
-      if (form.printFile) formData.append("printFile", form.printFile);
-      if (form.receiptFile) formData.append("receiptFile", form.receiptFile);
+      // ═══════════════════════════════════════════════════════════
+      // المرحلة 1: إرسال بيانات الطلب (JSON فقط — بدون ملفات)
+      // ═══════════════════════════════════════════════════════════
+      const orderPayload = {
+        fullName: form.fullName.trim(),
+        phone: form.phone.trim(),
+        pageCount: form.pageCount,
+        paperSize: form.paperSize,
+        printSide: form.printSide,
+        copies: form.copies,
+        colorType: form.colorType,
+        bindingType: form.bindingType,
+        payMethod: form.payMethod,
+        deliveryMethod: form.deliveryMethod,
+        address: form.address.trim(),
+        notes: form.notes.trim(),
+        hasPrintFile: !!form.printFile,
+        printFileName: form.printFile?.name || null,
+        hasReceiptFile: !!form.receiptFile && form.payMethod !== "الدفع عند الاستلام",
+        receiptFileName: form.payMethod !== "الدفع عند الاستلام" ? form.receiptFile?.name || null : null,
+      };
 
-      // Use XMLHttpRequest for progress tracking
-      const result = await new Promise<{ status: string; order?: { orderNumber: string; totalPrice: number; createdAt: string }; error?: string }>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            const percent = Math.round((e.loaded / e.total) * 60); // 0-60% for upload
-            setUploadProgress({ percent: Math.max(percent, 15), stage: "جاري رفع الملفات...", stageIndex: 1 });
-          }
-        };
-
-        xhr.upload.onload = () => {
-          setUploadProgress({ percent: 70, stage: "جاري معالجة الطلب...", stageIndex: 2 });
-        };
-
-        xhr.onload = () => {
-          setUploadProgress({ percent: 90, stage: "جاري معالجة الطلب...", stageIndex: 2 });
-
-          // Check HTTP status — XHR onload fires for ALL HTTP responses (including 4xx/5xx)
-          if (xhr.status >= 200 && xhr.status < 300) {
-            try {
-              const data = JSON.parse(xhr.responseText);
-              resolve(data);
-            } catch {
-              reject(new Error("حدث خطأ في قراءة استجابة الخادم"));
-            }
-          } else {
-            // Server returned an error status (4xx, 5xx)
-            try {
-              const data = JSON.parse(xhr.responseText);
-              // Server returned a JSON error — resolve it so the main handler can show the message
-              resolve(data);
-            } catch {
-              // Server returned a non-JSON error (e.g., HTML error page from Next.js)
-              reject(new Error(`خطأ من الخادم (${xhr.status}). يرجى المحاولة مرة أخرى.`));
-            }
-          }
-        };
-
-        xhr.onerror = () => {
-          // This fires on network-level failures (offline, DNS error, CORS block, connection dropped)
-          const isOffline = typeof navigator !== "undefined" && !navigator.onLine;
-          if (isOffline) {
-            reject(new Error("لا يوجد اتصال بالإنترنت. يرجى التحقق من شبكتك والمحاولة مرة أخرى."));
-          } else {
-            reject(new Error("تعذر الاتصال بالخادم. يرجى التحقق من اتصالك بالإنترنت والمحاولة مرة أخرى."));
-          }
-        };
-
-        xhr.ontimeout = () => {
-          reject(new Error("انتهت مهلة الاتصال. قد يكون الخادم مشغولاً — يرجى المحاولة مرة أخرى."));
-        };
-
-        xhr.timeout = 120000; // 2 minutes
-        xhr.open("POST", "/api/orders");
-        xhr.send(formData);
+      const orderRes = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(orderPayload),
       });
 
-      setUploadProgress({ percent: 100, stage: "تم بنجاح!", stageIndex: 3 });
+      const orderResult = await orderRes.json();
 
-      if (result.status === "success") {
-        setOrderNumber(result.order!.orderNumber);
-        setTimeout(() => setSuccessDialog(true), 500);
-      } else {
-        const rawError = result.error || "حدث خطأ غير متوقع";
+      if (orderResult.status !== "success") {
+        const rawError = orderResult.error || "حدث خطأ غير متوقع";
         let friendlyError = rawError;
         if (rawError.includes("EROFS") || rawError.includes("read-only") || rawError.includes("ENOENT") || rawError.includes("no such file")) {
           friendlyError = "حدث خطأ في حفظ الملف. يرجى المحاولة مرة أخرى.";
@@ -314,12 +290,80 @@ export default function OrderPage() {
           friendlyError = "تعذر الاتصال بالخادم. يرجى المحاولة لاحقاً.";
         } else if (rawError.includes("429") || rawError.includes("طلبات كثيرة")) {
           friendlyError = "طلبات كثيرة جداً. يرجى الانتظار قليلاً ثم المحاولة.";
-        } else if (rawError.includes("حجم الملف")) {
-          friendlyError = rawError;
         }
         setErrorMessage(friendlyError);
         setErrorDialog(true);
+        return;
       }
+
+      const newOrderNumber = orderResult.order.orderNumber;
+      const newTotalPrice = orderResult.order.totalPrice;
+      setOrderNumber(newOrderNumber);
+      setOrderTotalPrice(newTotalPrice);
+
+      setUploadProgress({ percent: 25, stage: "تم حفظ البيانات بنجاح!", stageIndex: 0 });
+
+      // ═══════════════════════════════════════════════════════════
+      // المرحلة 2: رفع ملف الطباعة (إن وجد)
+      // ═══════════════════════════════════════════════════════════
+      if (form.printFile && orderResult.pendingFiles?.printFile) {
+        setUploadProgress({ percent: 30, stage: "جاري رفع ملف الطباعة...", stageIndex: 1 });
+
+        const printFormData = new FormData();
+        printFormData.append("orderNumber", newOrderNumber);
+        printFormData.append("fileType", "print");
+        printFormData.append("file", form.printFile);
+
+        try {
+          const printRes = await fetch("/api/upload-file", {
+            method: "POST",
+            body: printFormData,
+          });
+          const printResult = await printRes.json();
+          console.log(`📎 Print file upload: ${printResult.status}`, printResult.fileName || "");
+        } catch (printErr) {
+          console.error("⚠️ Print file upload failed (order is still saved):", printErr);
+        }
+
+        setUploadProgress({ percent: 60, stage: "تم رفع ملف الطباعة!", stageIndex: 1 });
+      } else {
+        // No print file to upload
+        setUploadProgress({ percent: 60, stage: "لا يوجد ملف طباعة للرفع", stageIndex: 1 });
+      }
+
+      // ═══════════════════════════════════════════════════════════
+      // المرحلة 3: رفع وصل التحويل (إن وجد)
+      // ═══════════════════════════════════════════════════════════
+      if (form.receiptFile && form.payMethod !== "الدفع عند الاستلام" && orderResult.pendingFiles?.receiptFile) {
+        setUploadProgress({ percent: 65, stage: "جاري رفع وصل التحويل...", stageIndex: 2 });
+
+        const receiptFormData = new FormData();
+        receiptFormData.append("orderNumber", newOrderNumber);
+        receiptFormData.append("fileType", "receipt");
+        receiptFormData.append("file", form.receiptFile);
+
+        try {
+          const receiptRes = await fetch("/api/upload-file", {
+            method: "POST",
+            body: receiptFormData,
+          });
+          const receiptResult = await receiptRes.json();
+          console.log(`📎 Receipt file upload: ${receiptResult.status}`, receiptResult.fileName || "");
+        } catch (receiptErr) {
+          console.error("⚠️ Receipt file upload failed (order is still saved):", receiptErr);
+        }
+
+        setUploadProgress({ percent: 90, stage: "تم رفع وصل التحويل!", stageIndex: 2 });
+      } else {
+        // No receipt file to upload
+        setUploadProgress({ percent: 90, stage: "تم حفظ البيانات!", stageIndex: 2 });
+      }
+
+      // ═══════════════════════════════════════════════════════════
+      // تم بنجاح!
+      // ═══════════════════════════════════════════════════════════
+      setUploadProgress({ percent: 100, stage: "تم بنجاح!", stageIndex: 3 });
+      setTimeout(() => setSuccessDialog(true), 500);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "تعذر الاتصال بالخادم. يرجى التحقق من اتصالك بالإنترنت والمحاولة مرة أخرى.";
       setErrorMessage(msg);
@@ -338,6 +382,8 @@ export default function OrderPage() {
     setSuccessDialog(false);
     setErrorDialog(false);
     setOrderNumber("");
+    setOrderTotalPrice(0);
+    setCopied(false);
     setUploadProgress(null);
     if (printFileRef.current) printFileRef.current.value = "";
     if (receiptFileRef.current) receiptFileRef.current.value = "";
@@ -579,7 +625,6 @@ export default function OrderPage() {
       {/* ── Success Dialog ────────────────────────────────── */}
       <Dialog open={successDialog} onOpenChange={(open) => {
         if (!open) {
-          // Reset form when dialog closes (whether by button or clicking outside)
           resetForm();
         }
       }}>
@@ -595,17 +640,62 @@ export default function OrderPage() {
             </motion.div>
             <DialogTitle className="text-2xl font-extrabold">تم إرسال طلبك بنجاح!</DialogTitle>
             <DialogDescription className="text-base leading-relaxed mt-2">
-              تم تسجيل طلبك وحفظ ملفاتك بنجاح. سيتم التواصل معك قريباً على رقم الواتساب المدخل.
+              تم تسجيل طلبك وحفظ بياناتك وملفاتك بنجاح. سيتم التواصل معك قريباً على رقم الواتساب المدخل.
             </DialogDescription>
           </DialogHeader>
+
+          {/* Order Number Section */}
           {orderNumber && (
-            <div className="bg-emerald-50 dark:bg-emerald-900/30 rounded-xl p-4 mt-4">
-              <p className="text-sm text-emerald-700 dark:text-emerald-300 mb-1">رقم الطلب</p>
-              <p className="text-2xl font-extrabold text-emerald-800 dark:text-emerald-200 font-mono tracking-wider">
-                {orderNumber}
-              </p>
+            <div className="bg-emerald-50 dark:bg-emerald-900/30 rounded-xl p-5 mt-4 space-y-3">
+              <p className="text-sm font-bold text-emerald-700 dark:text-emerald-300">رقم الطلب</p>
+              <div className="flex items-center justify-center gap-2">
+                <p className="text-2xl font-extrabold text-emerald-800 dark:text-emerald-200 font-mono tracking-wider">
+                  {orderNumber}
+                </p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={copyOrderNumber}
+                  className="h-9 w-9 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-800"
+                >
+                  {copied ? (
+                    <ClipboardCheck className="w-4 h-4 text-emerald-600" />
+                  ) : (
+                    <Copy className="w-4 h-4 text-emerald-600" />
+                  )}
+                </Button>
+              </div>
+              {copied && (
+                <motion.p
+                  initial={{ opacity: 0, y: -5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="text-xs font-bold text-emerald-600"
+                >
+                  تم النسخ!
+                </motion.p>
+              )}
             </div>
           )}
+
+          {/* Important Note */}
+          <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 mt-4">
+            <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-amber-800 dark:text-amber-200 leading-relaxed text-right">
+              <strong>مهم:</strong> احتفظ برقم الطلب للمطالبة به عند الاستلام. بدون رقم الطلب لن تتمكن من استلام طلبك.
+            </div>
+          </div>
+
+          {/* Total Price */}
+          {orderTotalPrice > 0 && (
+            <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 mt-2">
+              <span className="text-sm font-bold text-muted-foreground">المبلغ الإجمالي</span>
+              <span className="text-lg font-extrabold text-emerald-600 dark:text-emerald-400">
+                {orderTotalPrice} د.ج
+              </span>
+            </div>
+          )}
+
           <Button
             onClick={resetForm}
             className="mt-6 w-full rounded-xl bg-gradient-to-l from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white h-12 text-base font-bold"

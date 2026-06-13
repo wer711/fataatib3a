@@ -4,15 +4,15 @@
  *  ربط مع Google Sheets + Google Drive
  * ═══════════════════════════════════════════════════════════════════════════
  *
- *  ⚡ كيف يعمل النظام:
+ *  ⚡ كيف يعمل النظام (النسخة الجديدة — متوافقة مع Netlify):
  *  ─────────────────────────────────────────────────────────────────────────
- *  العميل يرفع الملفات من جهازه مباشرة ← لا يحتاج أي حساب جوجل
- *  الملفات تُرسل كبيانات (base64) إلى هذا السكريبت
- *  السكريبت يحفظها تلقائياً في جوجل درايف الخاص بك (التاجر)
- *  ويضع روابط الملفات في الشيت
+ *  النظام يعمل بـ 3 مراحل منفصلة (لتجنب timeout على Netlify):
  *
- *  بمعنى: العميل لا يحتاج حساب جوجل أبداً!
- *  الملفات تُحفظ في حسابك أنت (التاجر) تلقائياً
+ *  المرحلة 1: saveOrder — حفظ بيانات الطلب في الشيت (سريع ~3 ثواني)
+ *  المرحلة 2: uploadFile — رفع ملف واحد إلى جوجل درايف (~5 ثواني)
+ *  المرحلة 3: updateFileUrls — تحديث الشيت بروابط الملفات (~2 ثانية)
+ *
+ *  النظام القديم (إرسال كل شيء في طلب واحد) لا يزال مدعوماً للتوافق العكسي
  *  ─────────────────────────────────────────────────────────────────────────
  *
  *  📋 تعليمات النشر خطوة بخطوة:
@@ -31,12 +31,6 @@
  *  8. انسخ رابط التطبيق الذي يظهر
  *  9. ضع الرابط في ملف .env بعد GOOGLE_SCRIPT_URL=
  *
- *  ⚡ تحسينات السرعة في هذا الإصدار:
- *  - رفع الملفات بأكبر حجم ممكن في كل طلب (تقليل عدد الطلبات)
- *  - استخدام setValues بدلاً من appendRow (أسرع)
- *  - تجنب العمليات غير الضرورية
- *  - حفظ الملفات مباشرة بدون عمليات إضافية
- *
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
@@ -44,17 +38,16 @@
 // ⚠️⚠️⚠️ هام: SECRET_TOKEN يجب أن يطابق تماماً قيمة SHEET_SECRET_TOKEN
 // في ملف .env الخاص بالمشروع! إذا لم تتطابق، ستحصل على خطأ "رمز الأمان غير صالح"
 var CONFIG = {
-  // ✅ معرف شيت جوجل (من الرابط المقدّم)
+  // ✅ معرف شيت جوجل
   SHEET_ID: "1-NhEn-Cg02mcPeAesfzqzmsH1bFS3hR3t791ityqOMw",
 
   // اسم الورقة داخل الشيت
   SHEET_NAME: "الطلبات",
 
-  // ✅ معرف مجلد جوجل درايف لحفظ الملفات (من الرابط المقدّم)
+  // ✅ معرف مجلد جوجل درايف لحفظ الملفات
   DRIVE_FOLDER_ID: "16asJMEO7sGG9kb-Rqs2amSM0i3Z4qHEA",
 
   // ⚠️⚠️⚠️ هذا التوكن يجب أن يطابق SHEET_SECRET_TOKEN في ملف .env
-  // القيمة الحالية مطابقة لملف .env — لا تغيرها إلا إذا غيّرت الملفين معاً
   SECRET_TOKEN: "ffc0b9b5959d4a9149eed95327b88f02b1c6ee8b64a723d2",
 };
 
@@ -75,21 +68,224 @@ function doPost(e) {
     }
 
     var token = payload._token;
+    var action = payload.action || "saveOrder"; // default action
     var data = payload.data;
 
-    // ⚡ التحقق من التوكن — هذا هو السبب الأكثر شيوعاً لخطأ "رمز الأمان غير صالح"
-    // تأكد أن هذه القيمة تطابق SHEET_SECRET_TOKEN في ملف .env
+    // ⚡ التحقق من التوكن
     if (token !== CONFIG.SECRET_TOKEN) {
       console.error("❌ التوكن غير متطابق! التوكن المستلم: " + (token || "فارغ"));
       return sendResponse({ status: "error", message: "رمز الأمان غير صالح" });
     }
 
-    // التحقق من البيانات
-    if (!data || !data.orderNumber) {
-      return sendResponse({ status: "error", message: "البيانات غير مكتملة" });
+    console.log("✅ توكن صحيح — الإجراء: " + action);
+
+    // ─── توجيه الإجراءات ─────────────────────────────────────────────
+    switch (action) {
+
+      // ── المرحلة 1: حفظ بيانات الطلب فقط (بدون ملفات) ──────────
+      case "saveOrder":
+        if (!data || !data.orderNumber) {
+          return sendResponse({ status: "error", message: "البيانات غير مكتملة" });
+        }
+        return handleSaveOrder(data);
+
+      // ── المرحلة 2: رفع ملف واحد إلى جوجل درايف ──────────────
+      case "uploadFile":
+        if (!data || !data.orderNumber || !data.fileData) {
+          return sendResponse({ status: "error", message: "بيانات الملف غير مكتملة" });
+        }
+        return handleUploadFile(data);
+
+      // ── المرحلة 3: تحديث روابط الملفات في الشيت ──────────────
+      case "updateFileUrls":
+        if (!data || !data.orderNumber) {
+          return sendResponse({ status: "error", message: "بيانات التحديث غير مكتملة" });
+        }
+        return handleUpdateFileUrls(data);
+
+      // ── الطريقة القديمة: إرسال كل شيء في طلب واحد (للتوافق) ──
+      case "fullSync":
+      default:
+        if (!data || !data.orderNumber) {
+          return sendResponse({ status: "error", message: "البيانات غير مكتملة" });
+        }
+        return handleFullSync(data);
+    }
+  } catch (error) {
+    console.error("❌ خطأ عام في معالجة الطلب: " + error.toString());
+    return sendResponse({ status: "error", message: error.toString() });
+  }
+}
+
+// ─── معالجة طلبات GET ───────────────────────────────────────────────────
+function doGet(e) {
+  return sendResponse({
+    status: "ok",
+    message: "خدمة فضاء الطباعة الرقمية تعمل بشكل طبيعي ✅",
+    sheetId: CONFIG.SHEET_ID,
+    driveFolder: CONFIG.DRIVE_FOLDER_ID,
+    tokenConfigured: CONFIG.SECRET_TOKEN ? true : false,
+    actions: ["saveOrder", "uploadFile", "updateFileUrls", "fullSync"],
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  المرحلة 1: حفظ بيانات الطلب في الشيت (سريع — بدون ملفات)
+// ═══════════════════════════════════════════════════════════════════════════
+function handleSaveOrder(data) {
+  try {
+    console.log("📝 حفظ بيانات الطلب: " + data.orderNumber);
+
+    var sheet = getSheet();
+    ensureHeaders(sheet);
+
+    // التحقق من عدم وجود طلب بنفس الرقم (منع التكرار)
+    var existingRow = findRowByOrderNumber(sheet, data.orderNumber);
+    if (existingRow > 0) {
+      console.log("⚠️ الطلب موجود مسبقاً: " + data.orderNumber + " في الصف " + existingRow);
+      return sendResponse({
+        status: "success",
+        message: "الطلب موجود مسبقاً",
+        row: existingRow,
+      });
     }
 
-    console.log("✅ توكن صحيح — جاري معالجة الطلب: " + data.orderNumber);
+    // إضافة صف جديد بالبيانات
+    var rowData = [
+      sanitizeCell(data.orderNumber),   // 1 - رقم الطلب
+      sanitizeCell(data.fullName),      // 2 - الاسم الكامل
+      sanitizeCell(data.phone),         // 3 - رقم الهاتف
+      data.pageCount,                   // 4 - عدد الصفحات
+      sanitizeCell(data.paperSize),     // 5 - حجم الورق
+      sanitizeCell(data.printSide),     // 6 - طريقة الطباعة
+      data.copies,                      // 7 - عدد النسخ
+      sanitizeCell(data.colorType),     // 8 - نوع الألوان
+      sanitizeCell(data.bindingType),   // 9 - نوع التغليف
+      sanitizeCell(data.payMethod),     // 10 - طريقة الدفع
+      data.totalPrice,                  // 11 - السعر الإجمالي
+      sanitizeCell(data.printFileName || ""),  // 12 - اسم ملف الطباعة
+      "",                               // 13 - رابط ملف الطباعة (يُضاف لاحقاً)
+      sanitizeCell(data.receiptFileName || ""), // 14 - اسم وصل التحويل
+      "",                               // 15 - رابط وصل التحويل (يُضاف لاحقاً)
+      sanitizeCell(data.deliveryMethod),// 16 - طريقة الاستلام
+      sanitizeCell(data.address || ""), // 17 - العنوان
+      sanitizeCell(data.notes || ""),   // 18 - ملاحظات
+      sanitizeCell(data.status || "جديد"), // 19 - الحالة
+      new Date().toLocaleString("ar-DZ", { timeZone: "Africa/Algiers" }), // 20 - التاريخ
+    ];
+
+    var lastRow = sheet.getLastRow();
+    sheet.getRange(lastRow + 1, 1, 1, rowData.length).setValues([rowData]);
+
+    // تنسيق خلية السعر
+    sheet.getRange(lastRow + 1, 11).setNumberFormat('#,##0 "د.ج"');
+
+    console.log("✅ تم حفظ بيانات الطلب: " + data.orderNumber + " في الصف " + (lastRow + 1));
+
+    return sendResponse({
+      status: "success",
+      message: "تم حفظ بيانات الطلب بنجاح",
+      row: lastRow + 1,
+    });
+  } catch (err) {
+    console.error("❌ خطأ في حفظ الطلب: " + err.toString());
+    return sendResponse({ status: "error", message: err.toString() });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  المرحلة 2: رفع ملف واحد إلى جوجل درايف
+// ═══════════════════════════════════════════════════════════════════════════
+function handleUploadFile(data) {
+  try {
+    console.log("📁 رفع ملف: " + (data.fileName || "unknown") + " للطلب: " + data.orderNumber);
+
+    var lock = LockService.getScriptLock();
+    lock.waitLock(30000); // انتظار حتى 30 ثانية
+
+    try {
+      var fileUrl = saveFileToDrive(
+        data.fileData,
+        data.fileName || "upload",
+        data.fileMimeType || "application/octet-stream",
+        data.orderNumber
+      );
+
+      console.log("✅ تم رفع الملف: " + fileUrl);
+
+      return sendResponse({
+        status: "success",
+        message: "تم رفع الملف بنجاح",
+        fileUrl: fileUrl,
+        fileName: data.fileName,
+        fileType: data.fileType, // "print" أو "receipt"
+      });
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (err) {
+    console.error("❌ خطأ في رفع الملف: " + err.toString());
+    return sendResponse({ status: "error", message: err.toString() });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  المرحلة 3: تحديث روابط الملفات في الشيت
+// ═══════════════════════════════════════════════════════════════════════════
+function handleUpdateFileUrls(data) {
+  try {
+    console.log("🔗 تحديث روابط الملفات للطلب: " + data.orderNumber);
+
+    var sheet = getSheet();
+    var row = findRowByOrderNumber(sheet, data.orderNumber);
+
+    if (row === 0) {
+      console.error("❌ لم يتم العثور على الطلب: " + data.orderNumber);
+      return sendResponse({ status: "error", message: "لم يتم العثور على الطلب في الشيت" });
+    }
+
+    // تحديث رابط ملف الطباعة (العمود 13)
+    if (data.printFileUrl) {
+      try {
+        var safeUrl = data.printFileUrl.replace(/"/g, "");
+        sheet.getRange(row, 13).setFormula(
+          '=HYPERLINK("' + safeUrl + '", "📎 فتح ملف الطباعة")'
+        );
+      } catch (e) {
+        sheet.getRange(row, 13).setValue(data.printFileUrl);
+      }
+    }
+
+    // تحديث رابط وصل التحويل (العمود 15)
+    if (data.receiptFileUrl) {
+      try {
+        var safeUrl2 = data.receiptFileUrl.replace(/"/g, "");
+        sheet.getRange(row, 15).setFormula(
+          '=HYPERLINK("' + safeUrl2 + '", "📎 فتح وصل التحويل")'
+        );
+      } catch (e) {
+        sheet.getRange(row, 15).setValue(data.receiptFileUrl);
+      }
+    }
+
+    console.log("✅ تم تحديث روابط الملفات للطلب: " + data.orderNumber);
+
+    return sendResponse({
+      status: "success",
+      message: "تم تحديث روابط الملفات",
+    });
+  } catch (err) {
+    console.error("❌ خطأ في تحديث الروابط: " + err.toString());
+    return sendResponse({ status: "error", message: err.toString() });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  الطريقة القديمة: إرسال كل شيء في طلب واحد (للتوافق العكسي)
+// ═══════════════════════════════════════════════════════════════════════════
+function handleFullSync(data) {
+  try {
+    console.log("📦 مزامنة كاملة للطلب: " + data.orderNumber);
 
     // حفظ الملفات في جوجل درايف
     var driveLinks = {};
@@ -136,66 +332,18 @@ function doPost(e) {
       message: "تم حفظ الطلب والملفات بنجاح",
       driveLinks: driveLinks,
     });
-  } catch (error) {
-    console.error("❌ خطأ عام في معالجة الطلب: " + error.toString());
-    return sendResponse({ status: "error", message: error.toString() });
+  } catch (err) {
+    console.error("❌ خطأ في المزامنة الكاملة: " + err.toString());
+    return sendResponse({ status: "error", message: err.toString() });
   }
 }
 
-// ─── معالجة طلبات GET ───────────────────────────────────────────────────
-function doGet(e) {
-  return sendResponse({
-    status: "ok",
-    message: "خدمة فضاء الطباعة الرقمية تعمل بشكل طبيعي ✅",
-    sheetId: CONFIG.SHEET_ID,
-    driveFolder: CONFIG.DRIVE_FOLDER_ID,
-    tokenConfigured: CONFIG.SECRET_TOKEN ? true : false,
-  });
-}
+// ═══════════════════════════════════════════════════════════════════════════
+//  الدوال المساعدة
+// ═══════════════════════════════════════════════════════════════════════════
 
-// ─── حفظ ملف في جوجل درايف (حساب التاجر) ───────────────────────────────
-// ⚡ العميل يرفع الملف من جهازه ← يُرسل كبيانات ← يُحفظ هنا
-// ⚡ العميل لا يحتاج أي حساب جوجل
-function saveFileToDrive(base64Data, fileName, mimeType, orderNumber) {
-  var folder = DriveApp.getFolderById(CONFIG.DRIVE_FOLDER_ID);
-
-  // إنشاء مجلد فرعي لكل طلب (تنظيم أفضل)
-  var orderFolder;
-  var existingFolders = folder.getFoldersByName(orderNumber);
-  if (existingFolders.hasNext()) {
-    orderFolder = existingFolders.next();
-  } else {
-    orderFolder = folder.createFolder(orderNumber);
-  }
-
-  // فك تشفير base64 وتحويله إلى ملف
-  var decoded = Utilities.base64Decode(base64Data);
-  var blob = Utilities.newBlob(decoded, mimeType, fileName);
-
-  // رفع الملف إلى جوجل درايف
-  var file = orderFolder.createFile(blob);
-
-  // السماح بالوصول عبر الرابط لأي شخص (حتى التاجر يمكنه فتحه بسهولة)
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-
-  return file.getUrl();
-}
-
-// ─── حماية من حقن الصيغ (Formula Injection Protection) ──────────────────
-// أي قيمة تبدأ بـ = + - @ قد تكون صيغة خطيرة في الشيت
-// نضيف فاصلة عليا ' قبلها لمنع تنفيذها كصيغة
-function sanitizeCell(value) {
-  if (value === null || value === undefined) return "";
-  var str = String(value);
-  // إذا كانت القيمة تبدأ بـ = + - @ أضف فاصلة عليا للحماية
-  if (/^[=+\-@]/.test(str)) {
-    return "'" + str;
-  }
-  return str;
-}
-
-// ─── حفظ البيانات في شيت جوجل ──────────────────────────────────────────
-function saveToSheet(data, driveLinks) {
+// ─── الحصول على ورقة الشيت ──────────────────────────────────────────────
+function getSheet() {
   var ss = SpreadsheetApp.openById(CONFIG.SHEET_ID);
   var sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
 
@@ -204,29 +352,33 @@ function saveToSheet(data, driveLinks) {
     sheet = ss.insertSheet(CONFIG.SHEET_NAME);
   }
 
-  // إضافة عناوين الأعمدة إذا كانت الورقة فارغة
+  return sheet;
+}
+
+// ─── إضافة عناوين الأعمدة إذا كانت الورقة فارغة ──────────────────────────
+function ensureHeaders(sheet) {
   if (sheet.getLastRow() === 0) {
     var headers = [
-      "رقم الطلب",
-      "الاسم الكامل",
-      "رقم الهاتف",
-      "عدد الصفحات",
-      "حجم الورق",
-      "طريقة الطباعة",
-      "عدد النسخ",
-      "نوع الألوان",
-      "نوع التغليف",
-      "طريقة الدفع",
-      "السعر الإجمالي",
-      "اسم ملف الطباعة",
-      "رابط ملف الطباعة",
-      "اسم وصل التحويل",
-      "رابط وصل التحويل",
-      "طريقة الاستلام",
-      "العنوان",
-      "ملاحظات",
-      "الحالة",
-      "التاريخ"
+      "رقم الطلب",        // 1
+      "الاسم الكامل",     // 2
+      "رقم الهاتف",       // 3
+      "عدد الصفحات",      // 4
+      "حجم الورق",        // 5
+      "طريقة الطباعة",    // 6
+      "عدد النسخ",        // 7
+      "نوع الألوان",      // 8
+      "نوع التغليف",      // 9
+      "طريقة الدفع",      // 10
+      "السعر الإجمالي",   // 11
+      "اسم ملف الطباعة",  // 12
+      "رابط ملف الطباعة", // 13
+      "اسم وصل التحويل",  // 14
+      "رابط وصل التحويل", // 15
+      "طريقة الاستلام",   // 16
+      "العنوان",          // 17
+      "ملاحظات",          // 18
+      "الحالة",           // 19
+      "التاريخ"           // 20
     ];
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
 
@@ -246,29 +398,111 @@ function saveToSheet(data, driveLinks) {
     sheet.setColumnWidth(17, 200); // العنوان
     sheet.setColumnWidth(20, 150); // التاريخ
 
-    // تنسيق عمود السعر الإجمالي كرقم مع عملة
-    // العمود 11 = السعر الإجمالي
-    var priceCol = sheet.getRange(2, 11, 1000, 1); // 1000 صف للتنسيق المسبق
+    // تنسيق عمود السعر الإجمالي
+    var priceCol = sheet.getRange(2, 11, 1000, 1);
     priceCol.setNumberFormat('#,##0 "د.ج"');
   }
+}
 
-  // إضافة صف جديد بالبيانات مع حماية من حقن الصيغ
+// ─── البحث عن صف بالرقم المرجعي للطلب ──────────────────────────────────
+function findRowByOrderNumber(sheet, orderNumber) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 0; // لا توجد بيانات بعد العناوين
+
+  var data = sheet.getRange(1, 1, lastRow, 1).getValues(); // العمود الأول = رقم الطلب
+  for (var i = 1; i < data.length; i++) { // نبدأ من 1 لتخطي العناوين
+    if (data[i][0] === orderNumber) {
+      return i + 1; // رقم الصف (مؤشر + 1)
+    }
+  }
+  return 0; // لم يتم العثور عليه
+}
+
+// ─── حفظ ملف في جوجل درايف ──────────────────────────────────────────────
+function saveFileToDrive(base64Data, fileName, mimeType, orderNumber) {
+  var folder = DriveApp.getFolderById(CONFIG.DRIVE_FOLDER_ID);
+
+  // إنشاء مجلد فرعي لكل طلب
+  var orderFolder;
+  var existingFolders = folder.getFoldersByName(orderNumber);
+  if (existingFolders.hasNext()) {
+    orderFolder = existingFolders.next();
+  } else {
+    orderFolder = folder.createFolder(orderNumber);
+  }
+
+  // فك تشفير base64 وتحويله إلى ملف
+  var decoded = Utilities.base64Decode(base64Data);
+  var blob = Utilities.newBlob(decoded, mimeType, fileName);
+
+  // رفع الملف إلى جوجل درايف
+  var file = orderFolder.createFile(blob);
+
+  // السماح بالوصول عبر الرابط لأي شخص
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+  return file.getUrl();
+}
+
+// ─── حماية من حقن الصيغ ─────────────────────────────────────────────────
+function sanitizeCell(value) {
+  if (value === null || value === undefined) return "";
+  var str = String(value);
+  if (/^[=+\-@]/.test(str)) {
+    return "'" + str;
+  }
+  return str;
+}
+
+// ─── حفظ البيانات في الشيت (الطريقة القديمة) ───────────────────────────
+function saveToSheet(data, driveLinks) {
+  var sheet = getSheet();
+  ensureHeaders(sheet);
+
+  // التحقق من التكرار
+  var existingRow = findRowByOrderNumber(sheet, data.orderNumber);
+  if (existingRow > 0) {
+    console.log("⚠️ الطلب موجود مسبقاً: " + data.orderNumber);
+    // تحديث الروابط فقط
+    if (driveLinks.printFileUrl) {
+      try {
+        var safeUrl = driveLinks.printFileUrl.replace(/"/g, "");
+        sheet.getRange(existingRow, 13).setFormula(
+          '=HYPERLINK("' + safeUrl + '", "📎 فتح ملف الطباعة")'
+        );
+      } catch (e) {
+        sheet.getRange(existingRow, 13).setValue(driveLinks.printFileUrl);
+      }
+    }
+    if (driveLinks.receiptFileUrl) {
+      try {
+        var safeUrl2 = driveLinks.receiptFileUrl.replace(/"/g, "");
+        sheet.getRange(existingRow, 15).setFormula(
+          '=HYPERLINK("' + safeUrl2 + '", "📎 فتح وصل التحويل")'
+        );
+      } catch (e) {
+        sheet.getRange(existingRow, 15).setValue(driveLinks.receiptFileUrl);
+      }
+    }
+    return;
+  }
+
   var rowData = [
     sanitizeCell(data.orderNumber),
     sanitizeCell(data.fullName),
     sanitizeCell(data.phone),
-    data.pageCount, // رقم — لا يحتاج sanitize
+    data.pageCount,
     sanitizeCell(data.paperSize),
     sanitizeCell(data.printSide),
-    data.copies, // رقم — لا يحتاج sanitize
+    data.copies,
     sanitizeCell(data.colorType),
     sanitizeCell(data.bindingType),
     sanitizeCell(data.payMethod),
-    data.totalPrice, // رقم — يُرسل كرقم الآن (بدون "د.ج") — التنسيق في الشيت
+    data.totalPrice,
     sanitizeCell(data.printFileName || ""),
-    "", // رابط ملف الطباعة — يُضاف كصيغة HYPERLINK أدناه
+    "",
     sanitizeCell(data.receiptFileName || ""),
-    "", // رابط وصل التحويل — يُضاف كصيغة HYPERLINK أدناه
+    "",
     sanitizeCell(data.deliveryMethod),
     sanitizeCell(data.address || ""),
     sanitizeCell(data.notes || ""),
@@ -276,19 +510,15 @@ function saveToSheet(data, driveLinks) {
     new Date().toLocaleString("ar-DZ", { timeZone: "Africa/Algiers" }),
   ];
 
-  // استخدام getRange + setValues بدلاً من appendRow (أسرع في Apps Script)
   var lastRow = sheet.getLastRow();
   sheet.getRange(lastRow + 1, 1, 1, rowData.length).setValues([rowData]);
+  sheet.getRange(lastRow + 1, 11).setNumberFormat('#,##0 "د.ج"');
 
-  // تنسيق خلية السعر في الصف الجديد
   var newRow = lastRow + 1;
-  sheet.getRange(newRow, 11).setNumberFormat('#,##0 "د.ج"');
 
-  // تحويل روابط درايف إلى روابط قابلة للنقر في الشيت
-  // الحماية: نتحقق أن الروابط لا تحتوي على صيغ ضارة
   if (driveLinks.printFileUrl) {
     try {
-      var safePrintUrl = driveLinks.printFileUrl.replace(/"/g, ""); // إزالة علامات الاقتباس
+      var safePrintUrl = driveLinks.printFileUrl.replace(/"/g, "");
       sheet.getRange(newRow, 13).setFormula(
         '=HYPERLINK("' + safePrintUrl + '", "📎 فتح ملف الطباعة")'
       );
@@ -298,7 +528,7 @@ function saveToSheet(data, driveLinks) {
   }
   if (driveLinks.receiptFileUrl) {
     try {
-      var safeReceiptUrl = driveLinks.receiptFileUrl.replace(/"/g, ""); // إزالة علامات الاقتباس
+      var safeReceiptUrl = driveLinks.receiptFileUrl.replace(/"/g, "");
       sheet.getRange(newRow, 15).setFormula(
         '=HYPERLINK("' + safeReceiptUrl + '", "📎 فتح وصل التحويل")'
       );
