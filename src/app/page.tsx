@@ -292,10 +292,20 @@ export default function OrderPage() {
         body: JSON.stringify(orderPayload),
       });
 
-      const orderResult = await orderRes.json();
+      // Safely parse JSON — handle HTML error pages from Next.js
+      let orderResult: Record<string, unknown>;
+      try {
+        const text = await orderRes.text();
+        orderResult = JSON.parse(text);
+      } catch {
+        console.error("❌ Non-JSON response from /api/orders, status:", orderRes.status);
+        setErrorMessage("حدث خطأ في الخادم. يرجى المحاولة مرة أخرى.");
+        setErrorDialog(true);
+        return;
+      }
 
-      if (orderResult.status !== "success") {
-        const rawError = orderResult.error || "حدث خطأ غير متوقع";
+      if (!orderResult || (orderResult as Record<string, unknown>).status !== "success") {
+        const rawError = ((orderResult as Record<string, unknown>)?.error as string) || "حدث خطأ غير متوقع";
         let friendlyError = rawError;
         if (rawError.includes("EROFS") || rawError.includes("read-only") || rawError.includes("ENOENT") || rawError.includes("no such file")) {
           friendlyError = "حدث خطأ في حفظ الملف. يرجى المحاولة مرة أخرى.";
@@ -309,8 +319,8 @@ export default function OrderPage() {
         return;
       }
 
-      const newOrderNumber = orderResult.order.orderNumber;
-      const newTotalPrice = orderResult.order.totalPrice;
+      const newOrderNumber = (orderResult.order as Record<string, unknown>)?.orderNumber as string;
+      const newTotalPrice = (orderResult.order as Record<string, unknown>)?.totalPrice as number;
       setOrderNumber(newOrderNumber);
       setOrderTotalPrice(newTotalPrice);
 
@@ -332,8 +342,17 @@ export default function OrderPage() {
             method: "POST",
             body: printFormData,
           });
-          const printResult = await printRes.json();
-          console.log(`📎 Print file upload: ${printResult.status}`, printResult.fileName || "");
+          // Safely parse JSON — handle HTML error pages
+          let printResult: Record<string, unknown> | null = null;
+          try {
+            const text = await printRes.text();
+            printResult = JSON.parse(text);
+          } catch {
+            console.error("⚠️ Print file upload: non-JSON response, status:", printRes.status);
+          }
+          if (printResult) {
+            console.log(`📎 Print file upload: ${printResult.status}`, printResult.fileName || "");
+          }
         } catch (printErr) {
           console.error("⚠️ Print file upload failed (order is still saved):", printErr);
         }
@@ -360,8 +379,17 @@ export default function OrderPage() {
             method: "POST",
             body: receiptFormData,
           });
-          const receiptResult = await receiptRes.json();
-          console.log(`📎 Receipt file upload: ${receiptResult.status}`, receiptResult.fileName || "");
+          // Safely parse JSON — handle HTML error pages
+          let receiptResult: Record<string, unknown> | null = null;
+          try {
+            const text = await receiptRes.text();
+            receiptResult = JSON.parse(text);
+          } catch {
+            console.error("⚠️ Receipt file upload: non-JSON response, status:", receiptRes.status);
+          }
+          if (receiptResult) {
+            console.log(`📎 Receipt file upload: ${receiptResult.status}`, receiptResult.fileName || "");
+          }
         } catch (receiptErr) {
           console.error("⚠️ Receipt file upload failed (order is still saved):", receiptErr);
         }
