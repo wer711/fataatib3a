@@ -4,16 +4,13 @@
  *  ربط مع Google Sheets + Google Drive
  * ═══════════════════════════════════════════════════════════════════════════
  *
- *  ⚡ كيف يعمل النظام (النسخة الجديدة — متوافقة مع Netlify):
+ *  ⚡ النسخة الجديدة — يتم إرسال معرفات الشيت والمجلد من الخادم!
  *  ─────────────────────────────────────────────────────────────────────────
- *  النظام يعمل بـ 3 مراحل منفصلة (لتجنب timeout على Netlify):
- *
- *  المرحلة 1: saveOrder — حفظ بيانات الطلب في الشيت (سريع ~3 ثواني)
- *  المرحلة 2: uploadFile — رفع ملف واحد إلى جوجل درايف (~5 ثواني)
- *  المرحلة 3: updateFileUrls — تحديث الشيت بروابط الملفات (~2 ثانية)
- *
- *  النظام القديم (إرسال كل شيء في طلب واحد) لا يزال مدعوماً للتوافق العكسي
- *  ─────────────────────────────────────────────────────────────────────────
+ *  الآن لا حاجة لتعديل SHEET_ID و DRIVE_FOLDER_ID هنا!
+ *  يتم إرسالها تلقائياً من ملف .env عبر الخادم مع كل طلب.
+ *  فقط تأكد من:
+ *    1. SECRET_TOKEN يطابق SHEET_SECRET_TOKEN في .env
+ *    2. نشر السكريبت كتطبيق ويب
  *
  *  📋 تعليمات النشر خطوة بخطوة:
  *  ─────────────────────────────────────────────────────────────────────────
@@ -37,15 +34,13 @@
 // ─── الإعدادات ──────────────────────────────────────────────────────────
 // ⚠️⚠️⚠️ هام: SECRET_TOKEN يجب أن يطابق تماماً قيمة SHEET_SECRET_TOKEN
 // في ملف .env الخاص بالمشروع! إذا لم تتطابق، ستحصل على خطأ "رمز الأمان غير صالح"
+//
+// 📌 ملاحظة: SHEET_ID و DRIVE_FOLDER_ID لم تعد تُستخدم من هنا!
+//    الآن يتم إرسالها من الخادم مع كل طلب (_sheetId و _driveFolderId)
+//    هذا يضمن أن البيانات تذهب دائماً للشيت والمجلد الصحيحين
 var CONFIG = {
-  // ✅ معرف شيت جوجل (من الرابط: https://docs.google.com/spreadsheets/d/1qwBgC727vlxyQnrK3dXCQ5_knsEklGeL3EBK5OepmJY/edit)
-  SHEET_ID: "1qwBgC727vlxyQnrK3dXCQ5_knsEklGeL3EBK5OepmJY",
-
   // اسم الورقة داخل الشيت
   SHEET_NAME: "الطلبات",
-
-  // ✅ معرف مجلد جوجل درايف (من الرابط: https://drive.google.com/drive/folders/1NStLD_GY67Cnd5I-D9BP_Ig1FPfbGjAC)
-  DRIVE_FOLDER_ID: "1NStLD_GY67Cnd5I-D9BP_Ig1FPfbGjAC",
 
   // ⚠️⚠️⚠️ هذا التوكن يجب أن يطابق SHEET_SECRET_TOKEN في ملف .env
   SECRET_TOKEN: "ffc0b9b5959d4a9149eed95327b88f02b1c6ee8b64a723d2",
@@ -71,13 +66,27 @@ function doPost(e) {
     var action = payload.action || "saveOrder"; // default action
     var data = payload.data;
 
+    // ⚡ استخراج معرفات الشيت والمجلد من الطلب (يُرسلها الخادم من .env)
+    var sheetId = payload._sheetId || "";
+    var driveFolderId = payload._driveFolderId || "";
+
     // ⚡ التحقق من التوكن
     if (token !== CONFIG.SECRET_TOKEN) {
       console.error("❌ التوكن غير متطابق! التوكن المستلم: " + (token || "فارغ"));
       return sendResponse({ status: "error", message: "رمز الأمان غير صالح" });
     }
 
-    console.log("✅ توكن صحيح — الإجراء: " + action);
+    // ⚡ التحقق من وجود معرفات الشيت والمجلد
+    if (!sheetId) {
+      console.error("❌ لم يتم استلام معرف الشيت (_sheetId)!");
+      return sendResponse({ status: "error", message: "معرف الشيت غير موجود في الطلب" });
+    }
+    if (!driveFolderId) {
+      console.error("❌ لم يتم استلام معرف المجلد (_driveFolderId)!");
+      return sendResponse({ status: "error", message: "معرف المجلد غير موجود في الطلب" });
+    }
+
+    console.log("✅ توكن صحيح — الإجراء: " + action + " | الشيت: " + sheetId + " | المجلد: " + driveFolderId);
 
     // ─── توجيه الإجراءات ─────────────────────────────────────────────
     switch (action) {
@@ -87,21 +96,21 @@ function doPost(e) {
         if (!data || !data.orderNumber) {
           return sendResponse({ status: "error", message: "البيانات غير مكتملة" });
         }
-        return handleSaveOrder(data);
+        return handleSaveOrder(data, sheetId);
 
       // ── المرحلة 2: رفع ملف واحد إلى جوجل درايف ──────────────
       case "uploadFile":
         if (!data || !data.orderNumber || !data.fileData) {
           return sendResponse({ status: "error", message: "بيانات الملف غير مكتملة" });
         }
-        return handleUploadFile(data);
+        return handleUploadFile(data, sheetId, driveFolderId);
 
       // ── المرحلة 3: تحديث روابط الملفات في الشيت ──────────────
       case "updateFileUrls":
         if (!data || !data.orderNumber) {
           return sendResponse({ status: "error", message: "بيانات التحديث غير مكتملة" });
         }
-        return handleUpdateFileUrls(data);
+        return handleUpdateFileUrls(data, sheetId);
 
       // ── الطريقة القديمة: إرسال كل شيء في طلب واحد (للتوافق) ──
       case "fullSync":
@@ -109,7 +118,7 @@ function doPost(e) {
         if (!data || !data.orderNumber) {
           return sendResponse({ status: "error", message: "البيانات غير مكتملة" });
         }
-        return handleFullSync(data);
+        return handleFullSync(data, sheetId, driveFolderId);
     }
   } catch (error) {
     console.error("❌ خطأ عام في معالجة الطلب: " + error.toString());
@@ -122,8 +131,8 @@ function doGet(e) {
   return sendResponse({
     status: "ok",
     message: "خدمة فضاء الطباعة الرقمية تعمل بشكل طبيعي ✅",
-    sheetId: CONFIG.SHEET_ID,
-    driveFolder: CONFIG.DRIVE_FOLDER_ID,
+    note: "يتم إرسال معرفات الشيت والمجلد من الخادم مع كل طلب POST",
+    sheetName: CONFIG.SHEET_NAME,
     tokenConfigured: CONFIG.SECRET_TOKEN ? true : false,
     actions: ["saveOrder", "uploadFile", "updateFileUrls", "fullSync"],
   });
@@ -132,11 +141,11 @@ function doGet(e) {
 // ═══════════════════════════════════════════════════════════════════════════
 //  المرحلة 1: حفظ بيانات الطلب في الشيت (سريع — بدون ملفات)
 // ═══════════════════════════════════════════════════════════════════════════
-function handleSaveOrder(data) {
+function handleSaveOrder(data, sheetId) {
   try {
-    console.log("📝 حفظ بيانات الطلب: " + data.orderNumber);
+    console.log("📝 حفظ بيانات الطلب: " + data.orderNumber + " في الشيت: " + sheetId);
 
-    var sheet = getSheet();
+    var sheet = getSheet(sheetId);
     ensureHeaders(sheet);
 
     // التحقق من عدم وجود طلب بنفس الرقم (منع التكرار)
@@ -180,12 +189,13 @@ function handleSaveOrder(data) {
     // تنسيق خلية السعر
     sheet.getRange(lastRow + 1, 11).setNumberFormat('#,##0 "د.ج"');
 
-    console.log("✅ تم حفظ بيانات الطلب: " + data.orderNumber + " في الصف " + (lastRow + 1));
+    console.log("✅ تم حفظ بيانات الطلب: " + data.orderNumber + " في الشيت " + sheetId + " الصف " + (lastRow + 1));
 
     return sendResponse({
       status: "success",
       message: "تم حفظ بيانات الطلب بنجاح",
       row: lastRow + 1,
+      sheetId: sheetId,
     });
   } catch (err) {
     console.error("❌ خطأ في حفظ الطلب: " + err.toString());
@@ -196,9 +206,9 @@ function handleSaveOrder(data) {
 // ═══════════════════════════════════════════════════════════════════════════
 //  المرحلة 2: رفع ملف واحد إلى جوجل درايف
 // ═══════════════════════════════════════════════════════════════════════════
-function handleUploadFile(data) {
+function handleUploadFile(data, sheetId, driveFolderId) {
   try {
-    console.log("📁 رفع ملف: " + (data.fileName || "unknown") + " للطلب: " + data.orderNumber);
+    console.log("📁 رفع ملف: " + (data.fileName || "unknown") + " للطلب: " + data.orderNumber + " في المجلد: " + driveFolderId);
 
     var lock = LockService.getScriptLock();
     lock.waitLock(30000); // انتظار حتى 30 ثانية
@@ -208,10 +218,11 @@ function handleUploadFile(data) {
         data.fileData,
         data.fileName || "upload",
         data.fileMimeType || "application/octet-stream",
-        data.orderNumber
+        data.orderNumber,
+        driveFolderId
       );
 
-      console.log("✅ تم رفع الملف: " + fileUrl);
+      console.log("✅ تم رفع الملف: " + fileUrl + " في المجلد: " + driveFolderId);
 
       return sendResponse({
         status: "success",
@@ -219,6 +230,7 @@ function handleUploadFile(data) {
         fileUrl: fileUrl,
         fileName: data.fileName,
         fileType: data.fileType, // "print" أو "receipt"
+        driveFolderId: driveFolderId,
       });
     } finally {
       lock.releaseLock();
@@ -232,11 +244,11 @@ function handleUploadFile(data) {
 // ═══════════════════════════════════════════════════════════════════════════
 //  المرحلة 3: تحديث روابط الملفات في الشيت
 // ═══════════════════════════════════════════════════════════════════════════
-function handleUpdateFileUrls(data) {
+function handleUpdateFileUrls(data, sheetId) {
   try {
-    console.log("🔗 تحديث روابط الملفات للطلب: " + data.orderNumber);
+    console.log("🔗 تحديث روابط الملفات للطلب: " + data.orderNumber + " في الشيت: " + sheetId);
 
-    var sheet = getSheet();
+    var sheet = getSheet(sheetId);
     var row = findRowByOrderNumber(sheet, data.orderNumber);
 
     if (row === 0) {
@@ -283,7 +295,7 @@ function handleUpdateFileUrls(data) {
 // ═══════════════════════════════════════════════════════════════════════════
 //  الطريقة القديمة: إرسال كل شيء في طلب واحد (للتوافق العكسي)
 // ═══════════════════════════════════════════════════════════════════════════
-function handleFullSync(data) {
+function handleFullSync(data, sheetId, driveFolderId) {
   try {
     console.log("📦 مزامنة كاملة للطلب: " + data.orderNumber);
 
@@ -297,7 +309,8 @@ function handleFullSync(data) {
           data.printFileData,
           data.printFileName || "print-file",
           data.printFileMime || "application/pdf",
-          data.orderNumber
+          data.orderNumber,
+          driveFolderId
         );
         driveLinks.printFileUrl = printUrl;
         console.log("✅ تم رفع ملف الطباعة: " + printUrl);
@@ -313,7 +326,8 @@ function handleFullSync(data) {
           data.receiptFileData,
           data.receiptFileName || "receipt-file",
           data.receiptFileMime || "image/jpeg",
-          data.orderNumber
+          data.orderNumber,
+          driveFolderId
         );
         driveLinks.receiptFileUrl = receiptUrl;
         console.log("✅ تم رفع وصل التحويل: " + receiptUrl);
@@ -323,7 +337,7 @@ function handleFullSync(data) {
     }
 
     // حفظ البيانات في شيت جوجل
-    saveToSheet(data, driveLinks);
+    saveToSheet(data, driveLinks, sheetId);
 
     console.log("✅ تم حفظ الطلب بنجاح: " + data.orderNumber);
 
@@ -343,8 +357,8 @@ function handleFullSync(data) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ─── الحصول على ورقة الشيت ──────────────────────────────────────────────
-function getSheet() {
-  var ss = SpreadsheetApp.openById(CONFIG.SHEET_ID);
+function getSheet(sheetId) {
+  var ss = SpreadsheetApp.openById(sheetId);
   var sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
 
   // إنشاء الورقة إذا لم تكن موجودة
@@ -419,8 +433,8 @@ function findRowByOrderNumber(sheet, orderNumber) {
 }
 
 // ─── حفظ ملف في جوجل درايف ──────────────────────────────────────────────
-function saveFileToDrive(base64Data, fileName, mimeType, orderNumber) {
-  var folder = DriveApp.getFolderById(CONFIG.DRIVE_FOLDER_ID);
+function saveFileToDrive(base64Data, fileName, mimeType, orderNumber, driveFolderId) {
+  var folder = DriveApp.getFolderById(driveFolderId);
 
   // إنشاء مجلد فرعي لكل طلب
   var orderFolder;
@@ -455,8 +469,8 @@ function sanitizeCell(value) {
 }
 
 // ─── حفظ البيانات في الشيت (الطريقة القديمة) ───────────────────────────
-function saveToSheet(data, driveLinks) {
-  var sheet = getSheet();
+function saveToSheet(data, driveLinks, sheetId) {
+  var sheet = getSheet(sheetId);
   ensureHeaders(sheet);
 
   // التحقق من التكرار

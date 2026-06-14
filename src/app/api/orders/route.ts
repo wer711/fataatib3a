@@ -4,6 +4,8 @@ import crypto from "crypto";
 // ─── Configuration ──────────────────────────────────────────
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL || "";
 const SHEET_SECRET_TOKEN = process.env.SHEET_SECRET_TOKEN || "ffc0b9b5959d4a9149eed95327b88f02b1c6ee8b64a723d2";
+const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID || "";
+const GOOGLE_DRIVE_FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID || "";
 
 // ─── Database helper ────────────────────────────────────────
 async function saveToDatabase(data: {
@@ -208,6 +210,9 @@ async function saveOrderToSheet(data: {
       _token: SHEET_SECRET_TOKEN,
       action: "saveOrder",
       data: payloadData,
+      // Pass sheet/folder IDs from .env so the GAS script uses the correct targets
+      _sheetId: GOOGLE_SHEET_ID,
+      _driveFolderId: GOOGLE_DRIVE_FOLDER_ID,
     };
 
     const body = JSON.stringify(payload);

@@ -4,6 +4,8 @@ import { NextRequest, NextResponse } from "next/server";
 const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15MB limit
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL || "";
 const SHEET_SECRET_TOKEN = process.env.SHEET_SECRET_TOKEN || "ffc0b9b5959d4a9149eed95327b88f02b1c6ee8b64a723d2";
+const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID || "";
+const GOOGLE_DRIVE_FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID || "";
 
 // ─── Google Sheets Integration — Upload File ────────────────
 async function uploadFileToDrive(
@@ -29,6 +31,9 @@ async function uploadFileToDrive(
         fileName,
         fileMimeType,
       },
+      // Pass sheet/folder IDs from .env so the GAS script uses the correct targets
+      _sheetId: GOOGLE_SHEET_ID,
+      _driveFolderId: GOOGLE_DRIVE_FOLDER_ID,
     };
 
     const body = JSON.stringify(payload);
@@ -110,6 +115,9 @@ async function updateSheetFileUrls(
       data: {
         orderNumber,
       },
+      // Pass sheet/folder IDs from .env so the GAS script uses the correct targets
+      _sheetId: GOOGLE_SHEET_ID,
+      _driveFolderId: GOOGLE_DRIVE_FOLDER_ID,
     };
 
     if (printFileUrl) {
