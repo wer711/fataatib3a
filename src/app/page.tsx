@@ -535,7 +535,7 @@ export default function OrderPage() {
           <div className="absolute bottom-0 right-20 w-48 h-48 rounded-full bg-white/10 blur-3xl" />
           <div className="absolute top-10 right-1/3 w-24 h-24 rounded-full bg-white/15 blur-2xl" />
         </div>
-        <div className="relative max-w-5xl mx-auto px-3 sm:px-6 py-6 sm:py-10">
+        <div className="relative max-w-5xl mx-auto px-3 sm:px-6 py-4 sm:py-8">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -566,8 +566,8 @@ export default function OrderPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 mt-4 sm:mt-6">
           {/* Form Area */}
           <div className="lg:col-span-2">
-            <Card className="border-0 shadow-xl shadow-slate-200/50 dark:shadow-none dark:border dark:border-slate-800 rounded-2xl overflow-hidden">
-              <CardContent className="p-3 sm:p-5 lg:p-8">
+            <Card className="border-0 shadow-xl shadow-slate-200/50 dark:shadow-none dark:border dark:border-slate-800 rounded-xl sm:rounded-2xl overflow-hidden">
+              <CardContent className="p-3 sm:p-5 lg:p-6">
                 <AnimatePresence mode="wait" custom={direction}>
                   <motion.div
                     key={currentStep}
@@ -609,14 +609,14 @@ export default function OrderPage() {
                 </AnimatePresence>
 
                 {/* Navigation Buttons */}
-                <div className="flex items-center justify-between mt-8 pt-6 border-t border-slate-200 dark:border-slate-700">
+                <div className="flex items-center justify-between mt-6 sm:mt-8 pt-4 sm:pt-6 border-t border-slate-200 dark:border-slate-700 gap-2">
                   {currentStep > 1 ? (
                     <Button
                       type="button"
                       variant="outline"
                       onClick={goPrev}
                       disabled={isSubmitting}
-                      className="gap-2 rounded-xl px-6 h-11 min-w-[80px]"
+                      className="gap-1 sm:gap-2 rounded-xl px-3 sm:px-6 h-11 min-w-[60px] sm:min-w-[80px] text-sm sm:text-base"
                     >
                       <ChevronRight className="w-4 h-4" />
                       السابق
@@ -629,7 +629,7 @@ export default function OrderPage() {
                     <Button
                       type="button"
                       onClick={goNext}
-                      className="gap-2 rounded-xl px-6 h-11 min-w-[80px] bg-gradient-to-l from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white shadow-lg shadow-emerald-600/25"
+                      className="gap-1 sm:gap-2 rounded-xl px-3 sm:px-6 h-11 min-w-[60px] sm:min-w-[80px] bg-gradient-to-l from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white shadow-lg shadow-emerald-600/25 text-sm sm:text-base"
                     >
                       التالي
                       <ChevronLeft className="w-4 h-4" />
@@ -639,7 +639,7 @@ export default function OrderPage() {
                       type="button"
                       onClick={handleSubmit}
                       disabled={isSubmitting}
-                      className="gap-2 rounded-xl px-8 bg-gradient-to-l from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white shadow-lg shadow-emerald-600/25 h-12 text-base font-bold min-w-[200px]"
+                      className="gap-1 sm:gap-2 rounded-xl px-4 sm:px-8 bg-gradient-to-l from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white shadow-lg shadow-emerald-600/25 h-12 text-sm sm:text-base font-bold min-w-[140px] sm:min-w-[200px]"
                     >
                       {isSubmitting ? (
                         <>
@@ -730,7 +730,7 @@ export default function OrderPage() {
 
           {/* Price Summary Sidebar */}
           <div className="lg:col-span-1">
-            <div className="sticky top-6">
+            <div className="lg:sticky lg:top-6">
               <PriceSummary form={form} breakdown={priceBreakdown} />
             </div>
           </div>
@@ -893,7 +893,7 @@ export default function OrderPage() {
 // ─── Step Indicator ────────────────────────────────────────
 function StepIndicator({ steps, currentStep }: { steps: typeof STEPS; currentStep: number }) {
   return (
-    <div className="flex items-center justify-center gap-1.5 sm:gap-4">
+    <div className="flex items-center justify-center gap-1 sm:gap-3 md:gap-4 flex-wrap">
       {steps.map((step, i) => {
         const isActive = currentStep === step.id;
         const isDone = currentStep > step.id;
@@ -920,7 +920,7 @@ function StepIndicator({ steps, currentStep }: { steps: typeof STEPS; currentSte
                 )}
               </motion.div>
               <span
-                className={`text-sm font-bold hidden sm:inline ${
+                className={`text-xs sm:text-sm font-bold hidden sm:inline ${
                   isActive
                     ? "text-teal-700 dark:text-teal-400"
                     : isDone
@@ -933,7 +933,7 @@ function StepIndicator({ steps, currentStep }: { steps: typeof STEPS; currentSte
             </div>
             {i < steps.length - 1 && (
               <div
-                className={`h-0.5 w-8 sm:w-16 rounded-full transition-colors ${
+                className={`h-0.5 w-6 sm:w-12 md:w-16 rounded-full transition-colors ${
                   currentStep > step.id ? "bg-emerald-500" : "bg-slate-200 dark:bg-slate-700"
                 }`}
               />
@@ -971,6 +971,24 @@ function NumberStepper({
   min?: number;
   max?: number;
 }) {
+  const [draft, setDraft] = useState<string | null>(null);
+
+  const commit = useCallback(
+    (raw: string) => {
+      const cleaned = raw.replace(/[^0-9]/g, "");
+      if (cleaned === "") {
+        onChange(min);
+      } else {
+        onChange(Math.min(max, Math.max(min, parseInt(cleaned, 10))));
+      }
+      setDraft(null);
+    },
+    [min, max, onChange]
+  );
+
+  // When not editing, display the external value directly
+  const displayValue = draft !== null ? draft : String(value);
+
   return (
     <div className="flex items-center gap-0 rounded-xl border border-input bg-background overflow-hidden h-12">
       {/* Minus button */}
@@ -978,23 +996,50 @@ function NumberStepper({
         type="button"
         onClick={() => onChange(Math.max(min, value - 1))}
         disabled={value <= min}
-        className="flex items-center justify-center w-12 h-full text-lg font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 active:bg-slate-200 dark:active:bg-slate-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed select-none flex-shrink-0"
+        className="flex items-center justify-center w-11 sm:w-12 h-full text-lg font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 active:bg-slate-200 dark:active:bg-slate-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed select-none flex-shrink-0"
         aria-label="إنقاص"
       >
         −
       </button>
 
-      {/* Number display */}
-      <div className="flex-1 text-center font-bold text-base tabular-nums select-none min-w-[3rem]">
-        {value}
-      </div>
+      {/* Editable number input */}
+      <input
+        type="text"
+        inputMode="numeric"
+        pattern="[0-9]*"
+        value={displayValue}
+        onChange={(e) => {
+          const val = e.target.value;
+          if (val === "" || /^[0-9]+$/.test(val)) {
+            setDraft(val);
+            if (val !== "") {
+              const num = parseInt(val, 10);
+              if (num >= min && num <= max) {
+                onChange(num);
+              }
+            }
+          }
+        }}
+        onFocus={() => setDraft(String(value))}
+        onBlur={() => {
+          if (draft !== null) commit(draft);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            if (draft !== null) commit(draft);
+            (e.target as HTMLInputElement).blur();
+          }
+        }}
+        className="flex-1 text-center font-bold text-base tabular-nums min-w-[3rem] bg-transparent outline-none border-x border-input h-full focus:bg-slate-50 dark:focus:bg-slate-800/50 transition-colors"
+        aria-label="القيمة"
+      />
 
       {/* Plus button */}
       <button
         type="button"
         onClick={() => onChange(Math.min(max, value + 1))}
         disabled={value >= max}
-        className="flex items-center justify-center w-12 h-full text-lg font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 active:bg-slate-200 dark:active:bg-slate-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed select-none flex-shrink-0"
+        className="flex items-center justify-center w-11 sm:w-12 h-full text-lg font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 active:bg-slate-200 dark:active:bg-slate-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed select-none flex-shrink-0"
         aria-label="زيادة"
       >
         +
@@ -1310,7 +1355,7 @@ function Step1Contact({
   updateField: <K extends keyof FormData>(key: K, value: FormData[K]) => void;
 }) {
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 sm:space-y-6">
       <SectionTitle icon={User} title="معلومات التواصل" />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
@@ -1371,7 +1416,7 @@ function Step2Printing({
   printFileRef: React.RefObject<HTMLInputElement | null>;
 }) {
   return (
-    <div className="space-y-8">
+    <div className="space-y-5 sm:space-y-8">
       <SectionTitle icon={FileText} title="خيارات الطباعة" />
 
       {/* Warning Banner */}
@@ -1520,7 +1565,7 @@ function Step3Payment({
   receiptFileRef: React.RefObject<HTMLInputElement | null>;
 }) {
   return (
-    <div className="space-y-8">
+    <div className="space-y-5 sm:space-y-8">
       <SectionTitle icon={CreditCard} title="الدفع والاستلام" />
 
       {/* Payment Method */}
@@ -1669,18 +1714,18 @@ function PriceSummary({
   const hasReceipt = form.receiptFile !== null;
 
   return (
-    <Card className="border-0 shadow-xl shadow-slate-200/50 dark:shadow-none dark:border dark:border-slate-800 rounded-2xl overflow-hidden sticky top-4 sm:top-6">
+    <Card className="border-0 shadow-xl shadow-slate-200/50 dark:shadow-none dark:border dark:border-slate-800 rounded-xl sm:rounded-2xl overflow-hidden lg:sticky lg:top-6">
       {/* Header */}
-      <div className="bg-gradient-to-l from-emerald-600 to-teal-600 dark:from-emerald-800 dark:to-teal-800 px-4 sm:px-5 py-3 sm:py-4">
+      <div className="bg-gradient-to-l from-emerald-600 to-teal-600 dark:from-emerald-800 dark:to-teal-800 px-3 sm:px-5 py-3 sm:py-4">
         <div className="flex items-center gap-2">
           <Package className="w-5 h-5 text-white" />
-          <h3 className="text-base sm:text-lg font-extrabold text-white">ملخص الطلب</h3>
+          <h3 className="text-sm sm:text-lg font-extrabold text-white">ملخص الطلب</h3>
         </div>
       </div>
 
-      <CardContent className="p-4 sm:p-5 space-y-3 sm:space-y-4">
+      <CardContent className="p-3 sm:p-5 space-y-2 sm:space-y-4">
         {/* Line items */}
-        <div className="space-y-2.5 text-sm">
+        <div className="space-y-2 sm:space-y-2.5 text-xs sm:text-sm">
           <div className="flex justify-between">
             <span className="text-muted-foreground">سعر الصفحة</span>
             <span className="font-bold">{breakdown.unitPrice} د.ج</span>
