@@ -220,6 +220,7 @@ async function saveOrderToSheet(data: {
     const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout for metadata
 
     console.log(`📤 Saving order ${data.orderNumber} metadata to Google Sheet...`);
+    console.log(`📋 Sending IDs → Sheet: ${GOOGLE_SHEET_ID}, Folder: ${GOOGLE_DRIVE_FOLDER_ID}`);
 
     const firstRes = await fetch(GOOGLE_SCRIPT_URL, {
       method: "POST",
@@ -244,7 +245,7 @@ async function saveOrderToSheet(data: {
         if (secondRes.ok) {
           const result = await secondRes.json();
           if (result.status === "success") {
-            console.log(`✅ Order metadata synced to Google Sheet: ${data.orderNumber}`);
+            console.log(`✅ Order metadata synced to Google Sheet: ${data.orderNumber} | GAS used sheetId: ${result.sheetId || 'unknown'} | row: ${result.row}`);
             return { success: true, sheetRow: result.row };
           } else {
             console.error(`❌ Google Sheet sync failed:`, result.message);
