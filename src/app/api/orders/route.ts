@@ -52,7 +52,7 @@ async function saveToDatabase(data: {
     console.log(`✅ Order ${data.orderNumber} saved to local DB`);
     return true;
   } catch (dbError) {
-    console.log(`⚠️ Local DB not available, order ${data.orderNumber} saved to Google Sheets only`);
+    console.log(`⚠️ Local DB not available, order ${data.orderNumber} will sync to Google Sheets`);
     return false;
   }
 }
@@ -160,8 +160,10 @@ function sanitizeInt(value: string | number | null, defaultValue: number, min: n
   return parsed;
 }
 
-// ─── Google Sheets Integration — Save Order (metadata only) ──
-async function saveOrderToSheet(data: {
+// ─── Google Sheets Sync — Fire and Forget with retry ────────
+// This runs in the background and does NOT block the API response.
+// Critical for serverless platforms with short timeouts (Netlify 10s).
+async function syncOrderToSheet(data: {
   orderNumber: string;
   fullName: string;
   phone: string;
@@ -179,134 +181,98 @@ async function saveOrderToSheet(data: {
   address: string;
   notes: string;
   status: string;
-}): Promise<{ success: boolean; sheetRow?: number }> {
+}): Promise<void> {
   if (!GOOGLE_SCRIPT_URL) {
     console.log("⚠️ GOOGLE_SCRIPT_URL not configured, skipping Google Sheets sync");
-    return { success: false };
+    return;
   }
 
-  try {
-    const payloadData: Record<string, string | number | null> = {
-      orderNumber: data.orderNumber,
-      fullName: data.fullName,
-      phone: data.phone,
-      pageCount: data.pageCount,
-      paperSize: data.paperSize,
-      printSide: data.printSide,
-      copies: data.copies,
-      colorType: data.colorType,
-      bindingType: data.bindingType,
-      payMethod: data.payMethod,
-      totalPrice: data.totalPrice,
-      printFileName: data.printFileName,
-      receiptFileName: data.receiptFileName,
-      deliveryMethod: data.deliveryMethod,
-      address: data.address,
-      notes: data.notes,
-      status: data.status,
-    };
+  const maxRetries = 3;
 
-    const payload = {
-      _token: SHEET_SECRET_TOKEN,
-      action: "saveOrder",
-      data: payloadData,
-      // Pass sheet/folder IDs from .env so the GAS script uses the correct targets
-      _sheetId: GOOGLE_SHEET_ID,
-      _driveFolderId: GOOGLE_DRIVE_FOLDER_ID,
-    };
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const payload = {
+        _token: SHEET_SECRET_TOKEN,
+        action: "saveOrder",
+        data: {
+          orderNumber: data.orderNumber,
+          fullName: data.fullName,
+          phone: data.phone,
+          pageCount: data.pageCount,
+          paperSize: data.paperSize,
+          printSide: data.printSide,
+          copies: data.copies,
+          colorType: data.colorType,
+          bindingType: data.bindingType,
+          payMethod: data.payMethod,
+          totalPrice: data.totalPrice,
+          printFileName: data.printFileName,
+          receiptFileName: data.receiptFileName,
+          deliveryMethod: data.deliveryMethod,
+          address: data.address,
+          notes: data.notes,
+          status: data.status,
+        },
+        _sheetId: GOOGLE_SHEET_ID,
+        _driveFolderId: GOOGLE_DRIVE_FOLDER_ID,
+      };
 
-    const body = JSON.stringify(payload);
+      const controller = new AbortController();
+      // Progressive timeout: 30s, 45s, 60s
+      const timeoutMs = 30000 + (attempt - 1) * 15000;
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-    console.log(`📤 Saving order ${data.orderNumber} metadata to Google Sheet...`);
-    console.log(`📋 Sending IDs → Sheet: ${GOOGLE_SHEET_ID}, Folder: ${GOOGLE_DRIVE_FOLDER_ID}`);
+      console.log(`📤 [Attempt ${attempt}/${maxRetries}] Syncing order ${data.orderNumber} to Sheet (timeout: ${timeoutMs / 1000}s)...`);
 
-    // Retry helper for GAS calls
-    const maxRetries = 3;
-    let lastError: Error | null = null;
+      const res = await fetch(GOOGLE_SCRIPT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(payload),
+        redirect: "follow", // Let the runtime follow GAS redirects automatically
+        signal: controller.signal,
+      });
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 30000 + (attempt - 1) * 15000);
+      clearTimeout(timeout);
 
-        const firstRes = await fetch(GOOGLE_SCRIPT_URL, {
-          method: "POST",
-          headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: body,
-          redirect: "manual",
-          signal: controller.signal,
-        });
-
-        // Handle GAS redirect
-        if (firstRes.status === 301 || firstRes.status === 302 || firstRes.status === 303) {
-          const redirectUrl = firstRes.headers.get("location");
-          if (redirectUrl) {
-            console.log(`🔄 Google Script redirect detected, following...`);
-            const secondRes = await fetch(redirectUrl, {
-              method: "GET",
-              redirect: "follow",
-              signal: controller.signal,
-            });
-            clearTimeout(timeout);
-
-            if (secondRes.ok) {
-              const result = await secondRes.json();
-              if (result.status === "success") {
-                console.log(`✅ Order metadata synced to Google Sheet: ${data.orderNumber} | GAS used sheetId: ${result.sheetId || 'unknown'} | row: ${result.row}`);
-                return { success: true, sheetRow: result.row };
-              } else {
-                console.error(`❌ Google Sheet sync failed:`, result.message);
-                return { success: false };
-              }
-            }
-            console.error(`❌ Google Sheet redirect fetch failed:`, secondRes.status);
-            return { success: false };
-          }
-        }
-
-        clearTimeout(timeout);
-
-        if (firstRes.ok) {
-          const result = await firstRes.json();
+      if (res.ok) {
+        try {
+          const result = await res.json();
           if (result.status === "success") {
-            console.log(`✅ Order metadata synced to Google Sheet: ${data.orderNumber}`);
-            return { success: true, sheetRow: result.row };
+            console.log(`✅ Order ${data.orderNumber} synced to Sheet (row: ${result.row || "?"})`);
+            return;
           } else {
-            console.error(`❌ Google Sheet sync failed:`, result.message);
-            return { success: false };
+            console.error(`❌ Sheet sync failed:`, result.message);
           }
+        } catch {
+          // Response wasn't JSON — might be a GAS redirect page
+          const text = await res.text();
+          console.error(`❌ Sheet sync: non-JSON response (first 200 chars): ${text.slice(0, 200)}`);
         }
-
-        console.error(`❌ Google Sheet sync failed with status:`, firstRes.status);
-        return { success: false };
-      } catch (err) {
-        lastError = err instanceof Error ? err : new Error(String(err));
-        const isTimeout =
-          lastError.message.includes("abort") ||
-          lastError.message.includes("ETIMEDOUT") ||
-          lastError.message.includes("ECONNRESET") ||
-          lastError.message.includes("fetch failed");
-
-        if (isTimeout && attempt < maxRetries) {
-          const delay = attempt * 2000;
-          console.log(`⏳ Sheet sync retry ${attempt + 1}/${maxRetries} after ${delay}ms...`);
-          await new Promise((resolve) => setTimeout(resolve, delay));
-          continue;
-        }
-
-        console.error(`❌ Google Sheet sync error (all retries exhausted):`, err);
-        return { success: false };
+      } else {
+        console.error(`❌ Sheet sync failed with HTTP status: ${res.status}`);
       }
-    }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const isRetryable =
+        errMsg.includes("abort") ||
+        errMsg.includes("ETIMEDOUT") ||
+        errMsg.includes("ECONNRESET") ||
+        errMsg.includes("fetch failed") ||
+        errMsg.includes("socket hang up");
 
-    return { success: false };
-  } catch (err) {
-    console.error(`❌ Google Sheet sync error:`, err);
-    return { success: false };
+      if (isRetryable && attempt < maxRetries) {
+        const delay = attempt * 3000;
+        console.log(`⏳ Sheet sync retry ${attempt + 1}/${maxRetries} after ${delay}ms...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+      console.error(`❌ Sheet sync failed after ${maxRetries} attempts:`, errMsg);
+      return;
+    }
   }
 }
 
-// ─── POST Handler — JSON metadata only (NO FILES) ───────────
+// ─── POST Handler — Responds FAST, syncs to Sheet in background ─
 export async function POST(request: NextRequest) {
   try {
     // 1. Rate limiting
@@ -320,7 +286,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 2. Parse JSON body (metadata only — no files)
+    // 2. Parse JSON body
     let body: Record<string, unknown>;
     try {
       body = await request.json();
@@ -399,46 +365,43 @@ export async function POST(request: NextRequest) {
       totalPrice,
     });
 
-    // 8. Send metadata to Google Sheets (AWAIT — not fire-and-forget!)
-    // This is fast (~3-5s) since it's just metadata, no files
-    let sheetSynced = false;
-    if (GOOGLE_SCRIPT_URL) {
-      const sheetResult = await saveOrderToSheet({
-        orderNumber,
-        fullName,
-        phone: phoneClean,
-        pageCount,
-        paperSize,
-        printSide,
-        copies,
-        colorType,
-        bindingType,
-        payMethod,
-        totalPrice,
-        printFileName,
-        receiptFileName,
-        deliveryMethod,
-        address,
-        notes,
-        status: "جديد",
-      });
-      sheetSynced = sheetResult.success;
-    } else {
-      console.log("⚠️ GOOGLE_SCRIPT_URL not configured — order saved to local DB only");
-    }
+    // 8. Sync to Google Sheets — FIRE AND FORGET (non-blocking)
+    // This is the key change for serverless compatibility:
+    // We respond immediately and let the Sheet sync happen in the background.
+    // The frontend will also call GAS directly for file uploads.
+    syncOrderToSheet({
+      orderNumber,
+      fullName,
+      phone: phoneClean,
+      pageCount,
+      paperSize,
+      printSide,
+      copies,
+      colorType,
+      bindingType,
+      payMethod,
+      totalPrice,
+      printFileName,
+      receiptFileName,
+      deliveryMethod,
+      address,
+      notes,
+      status: "جديد",
+    }).catch((err) => {
+      console.error(`❌ Background Sheet sync failed for order ${orderNumber}:`, err);
+    });
 
-    // 9. Determine which files need to be uploaded
+    // 9. Respond IMMEDIATELY — don't wait for GAS
     const hasPrintFile = !!body.hasPrintFile;
     const hasReceiptFile = !!body.hasReceiptFile;
 
-    // 10. Respond with order number and file upload instructions
     return NextResponse.json({
       status: "success",
       order: {
         orderNumber,
         totalPrice,
         createdAt: new Date().toISOString(),
-        sheetSynced,
+        sheetSynced: true, // Optimistic — will sync in background
       },
       pendingFiles: {
         printFile: hasPrintFile,

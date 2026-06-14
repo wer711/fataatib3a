@@ -1,6 +1,19 @@
 # ═══════════════════════════════════════════════════════════════
 # فضاء الطباعة الرقمية — Netlify Configuration
 # ═══════════════════════════════════════════════════════════════
+#
+# ⚠️ IMPORTANT: Netlify has severe limitations for this app:
+#   - Free plan: 10-second function timeout (GAS calls need 10-60s)
+#   - Free plan: 6MB payload limit (base64 files exceed this)
+#   - Pro plan: 26-second timeout (still may not be enough)
+#
+# ✅ RECOMMENDED: Deploy to Vercel instead (60s timeout on free plan)
+#    Or use Railway/Render for persistent server (no timeout limits)
+#
+# The app now uses DIRECT browser-to-GAS uploads to bypass these
+# limits. The /api/orders route responds immediately and syncs to
+# Google Sheets in the background (fire-and-forget).
+# ═══════════════════════════════════════════════════════════════
 
 [build]
   command = "npm run build"
@@ -12,19 +25,15 @@
 
 # API functions configuration
 [functions]
-  # Increase function timeout (max 10s on free plan, 26s on Pro)
   node_bundler = "esbuild"
 
-# Specific function configuration for file uploads
-# This gives upload-file more time to process
-[functions."api-upload-file"]
+# Specific function configuration for longer-running routes
+# Note: maxDuration only works on Netlify Pro (paid plan)
+[functions."api-orders"]
   maxDuration = 26
 
-# Environment variables (set these in Netlify dashboard instead)
-# These are just reminders — actual values should be set in Netlify UI
-# [context.production.environment]
-#   GOOGLE_SCRIPT_URL = "your-gas-url"
-#   SHEET_SECRET_TOKEN = "your-token"
+[functions."api-upload-file"]
+  maxDuration = 26
 
 # Headers for API routes
 [[headers]]

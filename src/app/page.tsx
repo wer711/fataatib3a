@@ -47,6 +47,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { calculatePrice, type PriceInput, type PriceBreakdown } from "@/lib/pricing";
 import { generateReceiptPDF } from "@/lib/generate-receipt";
+import { uploadFileDirectToGAS, updateFileUrlsDirectGAS } from "@/lib/gas-direct";
 import { toast } from "sonner";
 
 // ─── Types ───────────────────────────────────────────────────
@@ -292,7 +293,7 @@ export default function OrderPage() {
         body: JSON.stringify(orderPayload),
       });
 
-      // Safely parse JSON — handle HTML error pages from Next.js
+      // Safely parse JSON — handle HTML error pages from Next.js/Netlify
       let orderResult: Record<string, unknown>;
       try {
         const text = await orderRes.text();
@@ -324,71 +325,111 @@ export default function OrderPage() {
       setOrderNumber(newOrderNumber);
       setOrderTotalPrice(newTotalPrice);
 
-      setUploadProgress({ percent: 25, stage: "تم حفظ البيانات بنجاح!", stageIndex: 0 });
+      setUploadProgress({ percent: 20, stage: "تم حفظ البيانات بنجاح!", stageIndex: 0 });
+
+      // Track file URLs for Sheet update
+      let printFileUrl: string | undefined;
+      let receiptFileUrl: string | undefined;
 
       // ═══════════════════════════════════════════════════════════
-      // المرحلة 2: رفع ملف الطباعة (إن وجد)
+      // المرحلة 2: رفع ملف الطباعة — مباشرة إلى GAS من المتصفح
+      // (يتجاوز قيود حجم/مهلة الدوال السيرفرلس)
       // ═══════════════════════════════════════════════════════════
-      if (form.printFile && orderResult.pendingFiles?.printFile) {
-        setUploadProgress({ percent: 30, stage: "جاري رفع ملف الطباعة...", stageIndex: 1 });
-
-        const printFormData = new FormData();
-        printFormData.append("orderNumber", newOrderNumber);
-        printFormData.append("fileType", "print");
-        printFormData.append("file", form.printFile);
+      if (form.printFile) {
+        setUploadProgress({ percent: 25, stage: "جاري رفع ملف الطباعة...", stageIndex: 1 });
 
         try {
-          const printRes = await fetch("/api/upload-file", {
-            method: "POST",
-            body: printFormData,
-          });
-          // Safely parse JSON — handle HTML error pages
-          let printResult: Record<string, unknown> | null = null;
-          try {
-            const text = await printRes.text();
-            printResult = JSON.parse(text);
-          } catch {
-            console.error("⚠️ Print file upload: non-JSON response, status:", printRes.status);
-          }
-          if (printResult) {
-            console.log(`📎 Print file upload: ${printResult.status}`, printResult.fileName || "");
+          // الطريقة 1: رفع مباشر إلى GAS من المتصفح (بدون المرور عبر السيرفر)
+          const directResult = await uploadFileDirectToGAS(
+            newOrderNumber,
+            "print",
+            form.printFile,
+            (pct) => setUploadProgress({ percent: 25 + pct * 0.3, stage: "جاري رفع ملف الطباعة...", stageIndex: 1 })
+          );
+
+          if (directResult.success) {
+            printFileUrl = directResult.fileUrl;
+            console.log(`✅ Print file uploaded directly to GAS: ${printFileUrl}`);
+          } else {
+            // الطريقة 2: Fallback — رفع عبر سيرفر Next.js
+            console.warn("⚠️ Direct GAS upload failed, trying server fallback...");
+            try {
+              const printFormData = new FormData();
+              printFormData.append("orderNumber", newOrderNumber);
+              printFormData.append("fileType", "print");
+              printFormData.append("file", form.printFile);
+
+              const printRes = await fetch("/api/upload-file", {
+                method: "POST",
+                body: printFormData,
+              });
+              let printResult: Record<string, unknown> | null = null;
+              try {
+                const text = await printRes.text();
+                printResult = JSON.parse(text);
+              } catch {
+                console.error("⚠️ Print file server upload: non-JSON response");
+              }
+              if (printResult?.status === "success" || printResult?.status === "partial_success") {
+                printFileUrl = printResult.fileUrl as string | undefined;
+              }
+            } catch (serverErr) {
+              console.error("⚠️ Server fallback also failed:", serverErr);
+            }
           }
         } catch (printErr) {
           console.error("⚠️ Print file upload failed (order is still saved):", printErr);
         }
 
-        setUploadProgress({ percent: 60, stage: "تم رفع ملف الطباعة!", stageIndex: 1 });
+        setUploadProgress({ percent: 55, stage: "تم رفع ملف الطباعة!", stageIndex: 1 });
       } else {
-        // No print file to upload
-        setUploadProgress({ percent: 60, stage: "لا يوجد ملف طباعة للرفع", stageIndex: 1 });
+        setUploadProgress({ percent: 55, stage: "لا يوجد ملف طباعة للرفع", stageIndex: 1 });
       }
 
       // ═══════════════════════════════════════════════════════════
-      // المرحلة 3: رفع وصل التحويل (إن وجد)
+      // المرحلة 3: رفع وصل التحويل — مباشرة إلى GAS من المتصفح
       // ═══════════════════════════════════════════════════════════
-      if (form.receiptFile && form.payMethod !== "الدفع عند الاستلام" && orderResult.pendingFiles?.receiptFile) {
-        setUploadProgress({ percent: 65, stage: "جاري رفع وصل التحويل...", stageIndex: 2 });
-
-        const receiptFormData = new FormData();
-        receiptFormData.append("orderNumber", newOrderNumber);
-        receiptFormData.append("fileType", "receipt");
-        receiptFormData.append("file", form.receiptFile);
+      if (form.receiptFile && form.payMethod !== "الدفع عند الاستلام") {
+        setUploadProgress({ percent: 60, stage: "جاري رفع وصل التحويل...", stageIndex: 2 });
 
         try {
-          const receiptRes = await fetch("/api/upload-file", {
-            method: "POST",
-            body: receiptFormData,
-          });
-          // Safely parse JSON — handle HTML error pages
-          let receiptResult: Record<string, unknown> | null = null;
-          try {
-            const text = await receiptRes.text();
-            receiptResult = JSON.parse(text);
-          } catch {
-            console.error("⚠️ Receipt file upload: non-JSON response, status:", receiptRes.status);
-          }
-          if (receiptResult) {
-            console.log(`📎 Receipt file upload: ${receiptResult.status}`, receiptResult.fileName || "");
+          // الطريقة 1: رفع مباشر إلى GAS من المتصفح
+          const directResult = await uploadFileDirectToGAS(
+            newOrderNumber,
+            "receipt",
+            form.receiptFile,
+            (pct) => setUploadProgress({ percent: 60 + pct * 0.25, stage: "جاري رفع وصل التحويل...", stageIndex: 2 })
+          );
+
+          if (directResult.success) {
+            receiptFileUrl = directResult.fileUrl;
+            console.log(`✅ Receipt file uploaded directly to GAS: ${receiptFileUrl}`);
+          } else {
+            // الطريقة 2: Fallback — رفع عبر سيرفر Next.js
+            console.warn("⚠️ Direct GAS upload failed, trying server fallback...");
+            try {
+              const receiptFormData = new FormData();
+              receiptFormData.append("orderNumber", newOrderNumber);
+              receiptFormData.append("fileType", "receipt");
+              receiptFormData.append("file", form.receiptFile);
+
+              const receiptRes = await fetch("/api/upload-file", {
+                method: "POST",
+                body: receiptFormData,
+              });
+              let receiptResult: Record<string, unknown> | null = null;
+              try {
+                const text = await receiptRes.text();
+                receiptResult = JSON.parse(text);
+              } catch {
+                console.error("⚠️ Receipt file server upload: non-JSON response");
+              }
+              if (receiptResult?.status === "success" || receiptResult?.status === "partial_success") {
+                receiptFileUrl = receiptResult.fileUrl as string | undefined;
+              }
+            } catch (serverErr) {
+              console.error("⚠️ Server fallback also failed:", serverErr);
+            }
           }
         } catch (receiptErr) {
           console.error("⚠️ Receipt file upload failed (order is still saved):", receiptErr);
@@ -396,8 +437,14 @@ export default function OrderPage() {
 
         setUploadProgress({ percent: 90, stage: "تم رفع وصل التحويل!", stageIndex: 2 });
       } else {
-        // No receipt file to upload
         setUploadProgress({ percent: 90, stage: "تم حفظ البيانات!", stageIndex: 2 });
+      }
+
+      // ═══════════════════════════════════════════════════════════
+      // تحديث روابط الملفات في الشيت (fire-and-forget)
+      // ═══════════════════════════════════════════════════════════
+      if (printFileUrl || receiptFileUrl) {
+        updateFileUrlsDirectGAS(newOrderNumber, printFileUrl, receiptFileUrl).catch(() => {});
       }
 
       // ═══════════════════════════════════════════════════════════
