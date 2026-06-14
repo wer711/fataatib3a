@@ -47,7 +47,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { calculatePrice, type PriceInput, type PriceBreakdown } from "@/lib/pricing";
 import { generateReceiptPDF } from "@/lib/generate-receipt";
-import { uploadFileDirectToGAS, updateFileUrlsDirectGAS } from "@/lib/gas-direct";
+import { uploadFileDirectToGAS, updateFileUrlsDirectGAS, saveOrderDirectToGAS } from "@/lib/gas-direct";
 import { toast } from "sonner";
 
 // ─── Types ───────────────────────────────────────────────────
@@ -325,7 +325,45 @@ export default function OrderPage() {
       setOrderNumber(newOrderNumber);
       setOrderTotalPrice(newTotalPrice);
 
-      setUploadProgress({ percent: 20, stage: "تم حفظ البيانات بنجاح!", stageIndex: 0 });
+      setUploadProgress({ percent: 20, stage: "تم حفظ البيانات محلياً!", stageIndex: 0 });
+
+      // ═══════════════════════════════════════════════════════════
+      // المرحلة 1.5: إرسال بيانات الطلب مباشرة إلى Google Sheet
+      // (من المتصفح مباشرة — يتجاوز مشكلة serverless fire-and-forget)
+      // ═══════════════════════════════════════════════════════════
+      setUploadProgress({ percent: 22, stage: "جاري مزامنة البيانات مع Google Sheet...", stageIndex: 0 });
+
+      try {
+        const sheetResult = await saveOrderDirectToGAS({
+          orderNumber: newOrderNumber,
+          fullName: form.fullName.trim(),
+          phone: form.phone.trim(),
+          pageCount: form.pageCount,
+          paperSize: form.paperSize,
+          printSide: form.printSide,
+          copies: form.copies,
+          colorType: form.colorType,
+          bindingType: form.bindingType,
+          payMethod: form.payMethod,
+          totalPrice: newTotalPrice,
+          printFileName: form.printFile?.name || null,
+          receiptFileName: form.payMethod !== "الدفع عند الاستلام" ? form.receiptFile?.name || null : null,
+          deliveryMethod: form.deliveryMethod,
+          address: form.address.trim(),
+          notes: form.notes.trim(),
+          status: "جديد",
+        });
+
+        if (sheetResult.success) {
+          console.log(`✅ Order data synced to Sheet: row ${sheetResult.sheetRow || "?"}`);
+        } else {
+          console.warn("⚠️ Direct Sheet sync failed — order is still saved locally");
+        }
+      } catch (sheetErr) {
+        console.warn("⚠️ Direct Sheet sync error — order is still saved locally:", sheetErr);
+      }
+
+      setUploadProgress({ percent: 25, stage: "تم حفظ البيانات بنجاح!", stageIndex: 0 });
 
       // Track file URLs for Sheet update
       let printFileUrl: string | undefined;

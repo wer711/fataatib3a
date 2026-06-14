@@ -1,18 +1,18 @@
 /**
- * Direct Google Apps Script (GAS) upload from the browser.
+ * Direct Google Apps Script (GAS) calls from the browser.
  *
  * Why? Serverless platforms (Netlify free: 10s timeout, 6MB payload;
- * Vercel free: 60s timeout, 4.5MB payload) cannot reliably proxy large
- * file uploads to GAS. By uploading directly from the browser we:
+ * Vercel free: 60s timeout, 4.5MB payload) cannot reliably proxy
+ * requests to GAS, especially for:
+ * - File uploads (large payloads)
+ * - Order data sync (fire-and-forget doesn't work on serverless —
+ *   the function is killed as soon as the response is sent)
  *
- * 1. Bypass serverless payload limits (browser can POST up to ~50MB)
- * 2. Bypass serverless timeout limits (browser can wait as long as needed)
- * 3. Eliminate an unnecessary network hop (faster for the user)
- *
- * GAS web app endpoints DO support CORS for POST requests with
- * `Content-Type: text/plain`, so the browser can call them directly.
- * The 302 redirect that GAS returns is automatically followed by the
- * browser's fetch implementation.
+ * By calling GAS directly from the browser we:
+ * 1. Bypass serverless payload limits
+ * 2. Bypass serverless timeout limits
+ * 3. Eliminate the fire-and-forget problem (browser stays alive)
+ * 4. Eliminate an unnecessary network hop
  */
 
 // ─── GAS Config (fetched from /api/gas-config at runtime) ────────
@@ -53,6 +53,96 @@ function fileToBase64(file: File): Promise<string> {
     reader.onerror = () => reject(new Error("Failed to read file"));
     reader.readAsDataURL(file);
   });
+}
+
+// ─── Save order data directly to GAS Sheet ───────────────────────
+export async function saveOrderDirectToGAS(data: {
+  orderNumber: string;
+  fullName: string;
+  phone: string;
+  pageCount: number;
+  paperSize: string;
+  printSide: string;
+  copies: number;
+  colorType: string;
+  bindingType: string;
+  payMethod: string;
+  totalPrice: number;
+  printFileName: string | null;
+  receiptFileName: string | null;
+  deliveryMethod: string;
+  address: string;
+  notes: string;
+  status: string;
+}): Promise<{ success: boolean; sheetRow?: number }> {
+  const config = await getGasConfig();
+
+  if (!config.configured || !config.gasUrl) {
+    console.warn("⚠️ GAS not configured, skipping direct order save");
+    return { success: false };
+  }
+
+  try {
+    const payload = {
+      _token: config.token,
+      action: "saveOrder",
+      data: {
+        orderNumber: data.orderNumber,
+        fullName: data.fullName,
+        phone: data.phone,
+        pageCount: data.pageCount,
+        paperSize: data.paperSize,
+        printSide: data.printSide,
+        copies: data.copies,
+        colorType: data.colorType,
+        bindingType: data.bindingType,
+        payMethod: data.payMethod,
+        totalPrice: data.totalPrice,
+        printFileName: data.printFileName,
+        receiptFileName: data.receiptFileName,
+        deliveryMethod: data.deliveryMethod,
+        address: data.address,
+        notes: data.notes,
+        status: data.status,
+      },
+      _sheetId: config.sheetId,
+      _driveFolderId: config.driveFolderId,
+    };
+
+    console.log(`📤 Direct GAS save: order ${data.orderNumber} to Sheet...`);
+
+    const res = await fetch(config.gasUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload),
+      redirect: "follow", // Browser follows GAS 302 automatically
+    });
+
+    if (!res.ok) {
+      console.error(`❌ GAS direct save failed with status: ${res.status}`);
+      return { success: false };
+    }
+
+    let result: Record<string, unknown>;
+    try {
+      const text = await res.text();
+      result = JSON.parse(text);
+    } catch {
+      console.error("❌ GAS direct save: non-JSON response");
+      return { success: false };
+    }
+
+    if (result.status === "success") {
+      console.log(`✅ Order saved to Sheet directly: row ${result.row || "?"}`);
+      return { success: true, sheetRow: result.row as number | undefined };
+    } else {
+      console.error(`❌ GAS direct save error:`, result.message);
+      return { success: false };
+    }
+  } catch (err) {
+    console.error("❌ GAS direct save exception:", err);
+    return { success: false };
+  }
 }
 
 // ─── Upload file directly to GAS ────────────────────────────────
@@ -160,15 +250,19 @@ export async function updateFileUrlsDirectGAS(
       _driveFolderId: config.driveFolderId,
     };
 
-    // Fire-and-forget with a short timeout
-    fetch(config.gasUrl, {
+    // Await this — the browser stays alive and can complete the request
+    const res = await fetch(config.gasUrl, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify(payload),
       redirect: "follow",
     }).catch(() => {});
 
-    return true;
+    if (res && res.ok) {
+      console.log(`✅ File URLs updated in Sheet for order ${orderNumber}`);
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
