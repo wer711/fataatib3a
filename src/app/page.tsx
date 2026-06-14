@@ -29,6 +29,8 @@ import {
   Copy,
   ClipboardCheck,
   AlertTriangle,
+  FileDown,
+  Link2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -222,6 +224,7 @@ export default function OrderPage() {
     try {
       await navigator.clipboard.writeText(orderNumber);
       setCopied(true);
+      toast.success("تم نسخ رقم الطلب!");
       setTimeout(() => setCopied(false), 2000);
     } catch {
       // fallback
@@ -232,6 +235,7 @@ export default function OrderPage() {
       document.execCommand("copy");
       document.body.removeChild(textArea);
       setCopied(true);
+      toast.success("تم نسخ رقم الطلب!");
       setTimeout(() => setCopied(false), 2000);
     }
   }, [orderNumber]);
@@ -640,41 +644,54 @@ export default function OrderPage() {
             </motion.div>
             <DialogTitle className="text-2xl font-extrabold">تم إرسال طلبك بنجاح!</DialogTitle>
             <DialogDescription className="text-base leading-relaxed mt-2">
-              تم تسجيل طلبك وحفظ بياناتك وملفاتك بنجاح. سيتم التواصل معك قريباً على رقم الواتساب المدخل.
+              سيتم مراجعة طلبك من قبل فريقنا. سيتم التواصل معك قريباً على رقم الواتساب المدخل لتأكيد الطلب.
             </DialogDescription>
           </DialogHeader>
 
           {/* Order Number Section */}
           {orderNumber && (
-            <div className="bg-emerald-50 dark:bg-emerald-900/30 rounded-xl p-5 mt-4 space-y-3">
+            <div className="bg-emerald-50 dark:bg-emerald-900/30 rounded-xl p-5 mt-4 space-y-2">
               <p className="text-sm font-bold text-emerald-700 dark:text-emerald-300">رقم الطلب</p>
-              <div className="flex items-center justify-center gap-2">
-                <p className="text-2xl font-extrabold text-emerald-800 dark:text-emerald-200 font-mono tracking-wider">
-                  {orderNumber}
-                </p>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={copyOrderNumber}
-                  className="h-9 w-9 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-800"
-                >
-                  {copied ? (
+              <p className="text-2xl font-extrabold text-emerald-800 dark:text-emerald-200 font-mono tracking-wider">
+                {orderNumber}
+              </p>
+            </div>
+          )}
+
+          {/* Action Buttons: Copy / PDF + Copy Link */}
+          {orderNumber && (
+            <div className="grid grid-cols-2 gap-3 mt-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={copyOrderNumber}
+                className="h-11 rounded-xl border-emerald-200 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 gap-2 text-sm font-bold"
+              >
+                {copied ? (
+                  <>
                     <ClipboardCheck className="w-4 h-4 text-emerald-600" />
-                  ) : (
-                    <Copy className="w-4 h-4 text-emerald-600" />
-                  )}
-                </Button>
-              </div>
-              {copied && (
-                <motion.p
-                  initial={{ opacity: 0, y: -5 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="text-xs font-bold text-emerald-600"
-                >
-                  تم النسخ!
-                </motion.p>
-              )}
+                    <span className="text-emerald-600">تم النسخ!</span>
+                  </>
+                ) : (
+                  <>
+                    <FileDown className="w-4 h-4" />
+                    نسخ / PDF
+                  </>
+                )}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  const link = `${window.location.origin}?order=${orderNumber}`;
+                  navigator.clipboard.writeText(link).catch(() => {});
+                  toast.success("تم نسخ الرابط!");
+                }}
+                className="h-11 rounded-xl border-emerald-200 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 gap-2 text-sm font-bold"
+              >
+                <Link2 className="w-4 h-4" />
+                نسخ الرابط
+              </Button>
             </div>
           )}
 
@@ -682,7 +699,8 @@ export default function OrderPage() {
           <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 mt-4">
             <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-amber-800 dark:text-amber-200 leading-relaxed text-right">
-              <strong>مهم:</strong> احتفظ برقم الطلب للمطالبة به عند الاستلام. بدون رقم الطلب لن تتمكن من استلام طلبك.
+              <p className="font-bold mb-1">ملاحظة هامة</p>
+              <p>احتفظ برقم الطلب للمطالبة به عند الاستلام. لا تقم بتكرار الطلب إذا لم تتوصل برسالة تأكيد فوراً — سيتم مراجعة طلبك والتواصل معك في أقرب وقت.</p>
             </div>
           </div>
 
@@ -698,9 +716,9 @@ export default function OrderPage() {
 
           <Button
             onClick={resetForm}
-            className="mt-6 w-full rounded-xl bg-gradient-to-l from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white h-12 text-base font-bold"
+            className="mt-4 w-full rounded-xl bg-gradient-to-l from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white h-12 text-base font-bold"
           >
-            تقديم طلب جديد
+            إغلاق رسالة التأكيد
           </Button>
         </DialogContent>
       </Dialog>
