@@ -403,13 +403,20 @@ export default function OrderPage() {
                 const text = await printRes.text();
                 printResult = JSON.parse(text);
               } catch {
-                console.error("⚠️ Print file server upload: non-JSON response");
+                // Server returned HTML error page or empty response
+                // This can happen if the file is too large for the API route
+                console.warn("⚠️ Print file server upload: received non-JSON response (likely file too large or server error)");
               }
               if (printResult?.status === "success" || printResult?.status === "partial_success") {
                 printFileUrl = printResult.fileUrl as string | undefined;
+                if (printFileUrl) {
+                  console.log(`✅ Print file uploaded via server fallback: ${printFileUrl}`);
+                }
+              } else {
+                console.warn("⚠️ Print file upload failed via both direct and server methods. Order data is saved.");
               }
             } catch (serverErr) {
-              console.error("⚠️ Server fallback also failed:", serverErr);
+              console.warn("⚠️ Server fallback also failed:", serverErr);
             }
           }
         } catch (printErr) {
@@ -441,7 +448,7 @@ export default function OrderPage() {
             console.log(`✅ Receipt file uploaded directly to GAS: ${receiptFileUrl}`);
           } else {
             // الطريقة 2: Fallback — رفع عبر سيرفر Next.js
-            console.warn("⚠️ Direct GAS upload failed, trying server fallback...");
+            console.warn("⚠️ Direct GAS receipt upload failed, trying server fallback...");
             try {
               const receiptFormData = new FormData();
               receiptFormData.append("orderNumber", newOrderNumber);
@@ -457,13 +464,18 @@ export default function OrderPage() {
                 const text = await receiptRes.text();
                 receiptResult = JSON.parse(text);
               } catch {
-                console.error("⚠️ Receipt file server upload: non-JSON response");
+                console.warn("⚠️ Receipt file server upload: received non-JSON response");
               }
               if (receiptResult?.status === "success" || receiptResult?.status === "partial_success") {
                 receiptFileUrl = receiptResult.fileUrl as string | undefined;
+                if (receiptFileUrl) {
+                  console.log(`✅ Receipt file uploaded via server fallback: ${receiptFileUrl}`);
+                }
+              } else {
+                console.warn("⚠️ Receipt file upload failed via both methods. Order data is saved.");
               }
             } catch (serverErr) {
-              console.error("⚠️ Server fallback also failed:", serverErr);
+              console.warn("⚠️ Server fallback also failed:", serverErr);
             }
           }
         } catch (receiptErr) {
@@ -526,7 +538,7 @@ export default function OrderPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-50 via-white to-emerald-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-emerald-950/20">
+    <div className="min-h-screen flex flex-col overflow-x-hidden bg-gradient-to-br from-slate-50 via-white to-emerald-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-emerald-950/20">
       {/* ── Header ──────────────────────────────────────── */}
       <header className="relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-l from-emerald-600 via-teal-600 to-emerald-700 dark:from-emerald-800 dark:via-teal-800 dark:to-emerald-900" />
@@ -542,7 +554,7 @@ export default function OrderPage() {
             transition={{ duration: 0.6 }}
             className="text-center"
           >
-            <div className="inline-flex items-center gap-2 mb-3 sm:mb-4">
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-3 mb-3 sm:mb-4">
               <div className="w-10 h-10 sm:w-14 sm:h-14 rounded-xl sm:rounded-2xl bg-white/20 backdrop-blur-sm flex items-center justify-center">
                 <Printer className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
               </div>
@@ -691,7 +703,7 @@ export default function OrderPage() {
                                     <StageIcon className={`w-4 h-4 ${isActive ? "text-white animate-pulse" : "text-slate-400"}`} />
                                   )}
                                 </motion.div>
-                                <span className={`text-[10px] font-bold text-center leading-tight ${
+                                <span className={`text-[11px] sm:text-xs font-bold text-center leading-tight line-clamp-2 ${
                                   isCompleted ? "text-emerald-600" : isActive ? "text-teal-600" : "text-slate-400"
                                 }`}>
                                   {stage.label}
@@ -708,12 +720,12 @@ export default function OrderPage() {
                       </div>
 
                       {/* Progress bar */}
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-2">
-                          <CloudUpload className="w-4 h-4 animate-pulse" />
-                          {uploadProgress.stage}
+                      <div className="flex items-center justify-between text-sm gap-2">
+                        <span className="font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-2 flex-1 min-w-0">
+                          <CloudUpload className="w-4 h-4 animate-pulse flex-shrink-0" />
+                          <span className="truncate">{uploadProgress.stage}</span>
                         </span>
-                        <span className="text-emerald-600 dark:text-emerald-400 font-mono font-bold">
+                        <span className="text-emerald-600 dark:text-emerald-400 font-mono font-bold flex-shrink-0">
                           {uploadProgress.percent}%
                         </span>
                       </div>
@@ -750,17 +762,17 @@ export default function OrderPage() {
           resetForm();
         }
       }}>
-        <DialogContent className="sm:max-w-md rounded-2xl text-center">
+        <DialogContent className="sm:max-w-md rounded-2xl text-center p-4 sm:p-6">
           <DialogHeader className="items-center">
             <motion.div
               initial={{ scale: 0 }}
               animate={{ scale: 1 }}
               transition={{ type: "spring", stiffness: 200, damping: 15 }}
-              className="w-20 h-20 rounded-full bg-emerald-100 dark:bg-emerald-900/50 flex items-center justify-center mx-auto mb-4"
+              className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-emerald-100 dark:bg-emerald-900/50 flex items-center justify-center mx-auto mb-3 sm:mb-4"
             >
-              <CheckCircle2 className="w-12 h-12 text-emerald-600" />
+              <CheckCircle2 className="w-10 h-10 sm:w-12 sm:h-12 text-emerald-600" />
             </motion.div>
-            <DialogTitle className="text-2xl font-extrabold">تم إرسال طلبك بنجاح!</DialogTitle>
+            <DialogTitle className="text-xl sm:text-2xl font-extrabold">تم إرسال طلبك بنجاح!</DialogTitle>
             <DialogDescription className="text-base leading-relaxed mt-2">
               سيتم مراجعة طلبك من قبل فريقنا. سيتم التواصل معك قريباً على رقم الواتساب المدخل لتأكيد الطلب.
             </DialogDescription>
@@ -770,7 +782,7 @@ export default function OrderPage() {
           {orderNumber && (
             <div className="bg-emerald-50 dark:bg-emerald-900/30 rounded-xl p-5 mt-4 space-y-2">
               <p className="text-sm font-bold text-emerald-700 dark:text-emerald-300">رقم الطلب</p>
-              <p className="text-2xl font-extrabold text-emerald-800 dark:text-emerald-200 font-mono tracking-wider">
+              <p className="text-lg sm:text-2xl font-extrabold text-emerald-800 dark:text-emerald-200 font-mono tracking-normal sm:tracking-wider break-all">
                 {orderNumber}
               </p>
             </div>
@@ -778,7 +790,7 @@ export default function OrderPage() {
 
           {/* Action Buttons: Download + Copy Link */}
           {orderNumber && (
-            <div className="grid grid-cols-2 gap-3 mt-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
               <Button
                 type="button"
                 variant="outline"
@@ -839,13 +851,13 @@ export default function OrderPage() {
 
       {/* ── Error Dialog ──────────────────────────────────── */}
       <Dialog open={errorDialog} onOpenChange={setErrorDialog}>
-        <DialogContent className="sm:max-w-md rounded-2xl text-center">
+        <DialogContent className="sm:max-w-md rounded-2xl text-center p-4 sm:p-6">
           <DialogHeader className="items-center">
             <motion.div
               initial={{ scale: 0 }}
               animate={{ scale: 1 }}
               transition={{ type: "spring", stiffness: 200, damping: 15 }}
-              className="w-20 h-20 rounded-full bg-red-100 dark:bg-red-900/50 flex items-center justify-center mx-auto mb-4"
+              className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-red-100 dark:bg-red-900/50 flex items-center justify-center mx-auto mb-3 sm:mb-4"
             >
               <AlertCircle className="w-12 h-12 text-red-600" />
             </motion.div>
@@ -911,7 +923,7 @@ function StepIndicator({ steps, currentStep }: { steps: typeof STEPS; currentSte
                     ? "#0d9488"
                     : "#e2e8f0",
                 }}
-                className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-colors"
+                className="w-11 h-11 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-colors"
               >
                 {isDone ? (
                   <CheckCircle2 className="w-5 h-5 text-white" />
@@ -920,7 +932,7 @@ function StepIndicator({ steps, currentStep }: { steps: typeof STEPS; currentSte
                 )}
               </motion.div>
               <span
-                className={`text-xs sm:text-sm font-bold hidden sm:inline ${
+                className={`text-[10px] sm:text-sm font-bold leading-tight text-center ${
                   isActive
                     ? "text-teal-700 dark:text-teal-400"
                     : isDone
@@ -972,6 +984,7 @@ function NumberStepper({
   max?: number;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const commit = useCallback(
     (raw: string) => {
@@ -1002,14 +1015,16 @@ function NumberStepper({
         −
       </button>
 
-      {/* Editable number input */}
+      {/* Editable number input — uses type="tel" for better mobile keyboard */}
       <input
-        type="text"
+        ref={inputRef}
+        type="tel"
         inputMode="numeric"
         pattern="[0-9]*"
         value={displayValue}
         onChange={(e) => {
           const val = e.target.value;
+          // Allow empty string (user is deleting) or digits only
           if (val === "" || /^[0-9]+$/.test(val)) {
             setDraft(val);
             if (val !== "") {
@@ -1018,9 +1033,16 @@ function NumberStepper({
                 onChange(num);
               }
             }
+            // Don't call onChange when empty — let user finish typing
           }
         }}
-        onFocus={() => setDraft(String(value))}
+        onFocus={() => {
+          setDraft(String(value));
+          // Select all text on focus so user can easily replace the value
+          setTimeout(() => {
+            inputRef.current?.select();
+          }, 50);
+        }}
         onBlur={() => {
           if (draft !== null) commit(draft);
         }}
@@ -1765,7 +1787,7 @@ function PriceSummary({
             key={breakdown.total}
             initial={{ scale: 1.1 }}
             animate={{ scale: 1 }}
-            className="text-2xl font-extrabold text-emerald-600 dark:text-emerald-400"
+            className="text-lg sm:text-2xl font-extrabold text-emerald-600 dark:text-emerald-400"
           >
             {breakdown.total} د.ج
           </motion.span>

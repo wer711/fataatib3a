@@ -13,6 +13,14 @@
  * 2. Bypass serverless timeout limits
  * 3. Eliminate the fire-and-forget problem (browser stays alive)
  * 4. Eliminate an unnecessary network hop
+ *
+ * GAS Redirect Handling:
+ * Google Apps Script returns a 302 redirect after POST requests.
+ * With `redirect: "follow"`, the browser follows the redirect and
+ * gets the final response. However, sometimes the redirected response
+ * is HTML instead of JSON (e.g., Google login page, error page).
+ * We handle this by attempting to parse the response as JSON,
+ * and if that fails, we try to extract JSON from HTML content.
  */
 
 // ─── GAS Config (fetched from /api/gas-config at runtime) ────────
@@ -53,6 +61,87 @@ function fileToBase64(file: File): Promise<string> {
     reader.onerror = () => reject(new Error("Failed to read file"));
     reader.readAsDataURL(file);
   });
+}
+
+// ─── Parse GAS response (handles HTML-wrapped JSON) ──────────────
+function parseGasResponse(text: string): Record<string, unknown> | null {
+  // 1. Try direct JSON parse
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Not direct JSON, continue
+  }
+
+  // 2. Try to extract JSON from HTML content
+  // GAS sometimes wraps the response in an HTML page with the JSON in the body
+  const jsonMatch = text.match(/\{[\s\S]*"status"[\s\S]*\}/);
+  if (jsonMatch) {
+    try {
+      return JSON.parse(jsonMatch[0]);
+    } catch {
+      // Extracted JSON is also invalid
+    }
+  }
+
+  // 3. Check for common GAS redirect HTML patterns
+  if (text.includes("script.google.com") || text.includes("googleusercontent.com")) {
+    console.warn("⚠️ GAS returned a redirect page instead of JSON. The script may need redeployment.");
+  }
+
+  return null;
+}
+
+// ─── Make a GAS POST request with redirect handling ──────────────
+async function postToGAS(
+  gasUrl: string,
+  payload: Record<string, unknown>,
+  maxRetries: number = 2
+): Promise<{ ok: boolean; result: Record<string, unknown> | null; status: number }> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(gasUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(payload),
+        redirect: "follow", // Browser follows GAS 302 automatically
+      });
+
+      if (!res.ok) {
+        console.error(`❌ GAS request failed with status: ${res.status}`);
+        if (attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, attempt * 2000));
+          continue;
+        }
+        return { ok: false, result: null, status: res.status };
+      }
+
+      const text = await res.text();
+      const result = parseGasResponse(text);
+
+      if (result) {
+        return { ok: true, result, status: res.status };
+      }
+
+      // Non-JSON response — log a snippet for debugging
+      console.error(`❌ GAS non-JSON response (attempt ${attempt}/${maxRetries}, first 300 chars): ${text.slice(0, 300)}`);
+
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, attempt * 2000));
+        continue;
+      }
+
+      return { ok: false, result: null, status: res.status };
+    } catch (err) {
+      console.error(`❌ GAS request exception (attempt ${attempt}/${maxRetries}):`, err);
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, attempt * 2000));
+        continue;
+      }
+      return { ok: false, result: null, status: 0 };
+    }
+  }
+
+  return { ok: false, result: null, status: 0 };
 }
 
 // ─── Save order data directly to GAS Sheet ───────────────────────
@@ -111,32 +200,13 @@ export async function saveOrderDirectToGAS(data: {
 
     console.log(`📤 Direct GAS save: order ${data.orderNumber} to Sheet...`);
 
-    const res = await fetch(config.gasUrl, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(payload),
-      redirect: "follow", // Browser follows GAS 302 automatically
-    });
+    const { ok, result } = await postToGAS(config.gasUrl, payload);
 
-    if (!res.ok) {
-      console.error(`❌ GAS direct save failed with status: ${res.status}`);
-      return { success: false };
-    }
-
-    let result: Record<string, unknown>;
-    try {
-      const text = await res.text();
-      result = JSON.parse(text);
-    } catch {
-      console.error("❌ GAS direct save: non-JSON response");
-      return { success: false };
-    }
-
-    if (result.status === "success") {
+    if (ok && result && result.status === "success") {
       console.log(`✅ Order saved to Sheet directly: row ${result.row || "?"}`);
       return { success: true, sheetRow: result.row as number | undefined };
     } else {
-      console.error(`❌ GAS direct save error:`, result.message);
+      console.error(`❌ GAS direct save error:`, result?.message || "unknown error");
       return { success: false };
     }
   } catch (err) {
@@ -187,36 +257,17 @@ export async function uploadFileDirectToGAS(
     // POST directly to GAS — browser handles 302 redirect automatically
     console.log(`📤 Direct GAS upload: ${fileType} file "${safeName}" (${(base64Data.length / 1024).toFixed(0)}KB base64)`);
 
-    const res = await fetch(config.gasUrl, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(payload),
-      redirect: "follow", // Browser follows GAS 302 automatically
-    });
+    const { ok, result } = await postToGAS(config.gasUrl, payload);
 
     onProgress?.(80);
 
-    if (!res.ok) {
-      console.error(`❌ GAS direct upload failed with status: ${res.status}`);
-      return { success: false, fileName: safeName };
-    }
-
-    let result: Record<string, unknown>;
-    try {
-      const text = await res.text();
-      result = JSON.parse(text);
-    } catch {
-      console.error("❌ GAS direct upload: non-JSON response");
-      return { success: false, fileName: safeName };
-    }
-
-    onProgress?.(100);
-
-    if (result.status === "success") {
+    if (ok && result && result.status === "success") {
+      onProgress?.(100);
       console.log(`✅ GAS direct upload success: ${result.fileUrl}`);
       return { success: true, fileUrl: result.fileUrl as string, fileName: safeName };
     } else {
-      console.error(`❌ GAS direct upload error:`, result.message);
+      onProgress?.(100);
+      console.error(`❌ GAS direct upload error:`, result?.message || "unknown error");
       return { success: false, fileName: safeName };
     }
   } catch (err) {
@@ -251,14 +302,9 @@ export async function updateFileUrlsDirectGAS(
     };
 
     // Await this — the browser stays alive and can complete the request
-    const res = await fetch(config.gasUrl, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(payload),
-      redirect: "follow",
-    }).catch(() => {});
+    const { ok, result } = await postToGAS(config.gasUrl, payload, 1);
 
-    if (res && res.ok) {
+    if (ok && result && result.status === "success") {
       console.log(`✅ File URLs updated in Sheet for order ${orderNumber}`);
       return true;
     }
