@@ -506,7 +506,7 @@ export default function OrderPage() {
                       variant="outline"
                       onClick={goPrev}
                       disabled={isSubmitting}
-                      className="gap-2 rounded-xl px-6"
+                      className="gap-2 rounded-xl px-6 h-11 min-w-[80px]"
                     >
                       <ChevronRight className="w-4 h-4" />
                       السابق
@@ -519,7 +519,7 @@ export default function OrderPage() {
                     <Button
                       type="button"
                       onClick={goNext}
-                      className="gap-2 rounded-xl px-6 bg-gradient-to-l from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white shadow-lg shadow-emerald-600/25"
+                      className="gap-2 rounded-xl px-6 h-11 min-w-[80px] bg-gradient-to-l from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white shadow-lg shadow-emerald-600/25"
                     >
                       التالي
                       <ChevronLeft className="w-4 h-4" />

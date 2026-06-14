@@ -7,6 +7,54 @@ const SHEET_SECRET_TOKEN = process.env.SHEET_SECRET_TOKEN || "ffc0b9b5959d4a9149
 const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID || "";
 const GOOGLE_DRIVE_FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID || "";
 
+// ─── Retry helper ────────────────────────────────────────────
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries: number = 3,
+  baseDelay: number = 2000
+): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const controller = new AbortController();
+      // Increase timeout per attempt: 120s, 150s, 180s
+      const timeoutMs = 120000 + (attempt - 1) * 30000;
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+      // Create fresh options with new AbortController for each attempt
+      const freshOptions: RequestInit = {
+        ...options,
+        signal: controller.signal,
+      };
+
+      const res = await fetch(url, freshOptions);
+      clearTimeout(timeout);
+      return res;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      const isTimeout =
+        lastError.message.includes("abort") ||
+        lastError.message.includes("ETIMEDOUT") ||
+        lastError.message.includes("ECONNRESET") ||
+        lastError.message.includes("fetch failed") ||
+        lastError.message.includes("socket hang up");
+
+      if (isTimeout && attempt < maxRetries) {
+        const delay = baseDelay * attempt; // 2s, 4s, 6s
+        console.log(`⏳ Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms (error: ${lastError.message})...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+
+      throw lastError;
+    }
+  }
+
+  throw lastError || new Error("Unknown error");
+}
+
 // ─── Google Sheets Integration — Upload File ────────────────
 async function uploadFileToDrive(
   orderNumber: string,
@@ -39,33 +87,37 @@ async function uploadFileToDrive(
     const body = JSON.stringify(payload);
     console.log(`📤 Uploading ${fileType} file "${fileName}" for order ${orderNumber} (${(body.length / 1024).toFixed(0)}KB)...`);
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90000); // 90s timeout for file upload
-
-    const firstRes = await fetch(GOOGLE_SCRIPT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: body,
-      redirect: "manual",
-      signal: controller.signal,
-    });
+    const firstRes = await fetchWithRetry(
+      GOOGLE_SCRIPT_URL,
+      {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: body,
+        redirect: "manual",
+      },
+      3,  // max retries
+      3000 // base delay
+    );
 
     // Handle GAS redirect
     if (firstRes.status === 301 || firstRes.status === 302 || firstRes.status === 303) {
       const redirectUrl = firstRes.headers.get("location");
       if (redirectUrl) {
         console.log(`🔄 Google Script redirect detected for file upload, following...`);
-        const secondRes = await fetch(redirectUrl, {
-          method: "GET",
-          redirect: "follow",
-          signal: controller.signal,
-        });
-        clearTimeout(timeout);
+        const secondRes = await fetchWithRetry(
+          redirectUrl,
+          {
+            method: "GET",
+            redirect: "follow",
+          },
+          3,
+          2000
+        );
 
         if (secondRes.ok) {
           const result = await secondRes.json();
           if (result.status === "success") {
-            console.log(`✅ File uploaded to Drive: ${result.fileUrl}`);
+            console.log(`✅ File uploaded to Drive: ${result.fileUrl} (folder: ${result.driveFolderId || "unknown"})`);
             return { success: true, fileUrl: result.fileUrl };
           } else {
             console.error(`❌ File upload failed:`, result.message);
@@ -76,8 +128,6 @@ async function uploadFileToDrive(
         return { success: false };
       }
     }
-
-    clearTimeout(timeout);
 
     if (firstRes.ok) {
       const result = await firstRes.json();
@@ -93,7 +143,7 @@ async function uploadFileToDrive(
     console.error(`❌ File upload failed with status:`, firstRes.status);
     return { success: false };
   } catch (err) {
-    console.error(`❌ File upload error:`, err);
+    console.error(`❌ File upload error (all retries exhausted):`, err);
     return { success: false };
   }
 }
@@ -128,26 +178,31 @@ async function updateSheetFileUrls(
     }
 
     const body = JSON.stringify(payload);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
 
-    const firstRes = await fetch(GOOGLE_SCRIPT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body,
-      redirect: "manual",
-      signal: controller.signal,
-    });
+    const firstRes = await fetchWithRetry(
+      GOOGLE_SCRIPT_URL,
+      {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body,
+        redirect: "manual",
+      },
+      3,
+      2000
+    );
 
     if (firstRes.status === 301 || firstRes.status === 302 || firstRes.status === 303) {
       const redirectUrl = firstRes.headers.get("location");
       if (redirectUrl) {
-        const secondRes = await fetch(redirectUrl, {
-          method: "GET",
-          redirect: "follow",
-          signal: controller.signal,
-        });
-        clearTimeout(timeout);
+        const secondRes = await fetchWithRetry(
+          redirectUrl,
+          {
+            method: "GET",
+            redirect: "follow",
+          },
+          3,
+          2000
+        );
 
         if (secondRes.ok) {
           const result = await secondRes.json();
@@ -157,8 +212,6 @@ async function updateSheetFileUrls(
       }
     }
 
-    clearTimeout(timeout);
-
     if (firstRes.ok) {
       const result = await firstRes.json();
       return { success: result.status === "success" };
@@ -166,7 +219,7 @@ async function updateSheetFileUrls(
 
     return { success: false };
   } catch (err) {
-    console.error(`❌ Update file URLs error:`, err);
+    console.error(`❌ Update file URLs error (all retries exhausted):`, err);
     return { success: false };
   }
 }
@@ -217,7 +270,7 @@ export async function POST(request: NextRequest) {
     const base64Data = buffer.toString("base64");
     const safeName = file.name.replace(/[^\w\u0600-\u06FF.\-() ]/g, "").slice(0, 200) || "upload.bin";
 
-    // Upload to Google Drive
+    // Upload to Google Drive (with built-in retry)
     const uploadResult = await uploadFileToDrive(
       orderNumber,
       fileType,
@@ -227,7 +280,7 @@ export async function POST(request: NextRequest) {
     );
 
     if (!uploadResult.success) {
-      console.error(`❌ Failed to upload ${fileType} file for order ${orderNumber}`);
+      console.error(`❌ Failed to upload ${fileType} file for order ${orderNumber} (all retries exhausted)`);
       // Still return partial success — the order exists in Sheet, just the file failed
       return NextResponse.json({
         status: "partial_success",
@@ -238,11 +291,12 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Update Sheet with file URL
+    // Update Sheet with file URL (fire-and-forget, don't block the response)
     const printFileUrl = fileType === "print" ? uploadResult.fileUrl : undefined;
     const receiptFileUrl = fileType === "receipt" ? uploadResult.fileUrl : undefined;
 
-    await updateSheetFileUrls(orderNumber, printFileUrl, receiptFileUrl);
+    // Don't await - let it run in background so the user gets a faster response
+    updateSheetFileUrls(orderNumber, printFileUrl, receiptFileUrl).catch(() => {});
 
     // Try to update local DB
     try {
@@ -259,7 +313,7 @@ export async function POST(request: NextRequest) {
         });
       }
     } catch (dbErr) {
-      console.log(`⚠️ Local DB not available for update, Sheet updated`);
+      console.log(`⚠️ Local DB not available for update, Sheet will be updated async`);
     }
 
     console.log(`✅ ${fileType} file uploaded successfully for order ${orderNumber}`);

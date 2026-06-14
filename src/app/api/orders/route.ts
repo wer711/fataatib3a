@@ -216,61 +216,89 @@ async function saveOrderToSheet(data: {
     };
 
     const body = JSON.stringify(payload);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout for metadata
 
     console.log(`📤 Saving order ${data.orderNumber} metadata to Google Sheet...`);
     console.log(`📋 Sending IDs → Sheet: ${GOOGLE_SHEET_ID}, Folder: ${GOOGLE_DRIVE_FOLDER_ID}`);
 
-    const firstRes = await fetch(GOOGLE_SCRIPT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: body,
-      redirect: "manual",
-      signal: controller.signal,
-    });
+    // Retry helper for GAS calls
+    const maxRetries = 3;
+    let lastError: Error | null = null;
 
-    // Handle GAS redirect
-    if (firstRes.status === 301 || firstRes.status === 302 || firstRes.status === 303) {
-      const redirectUrl = firstRes.headers.get("location");
-      if (redirectUrl) {
-        console.log(`🔄 Google Script redirect detected, following...`);
-        const secondRes = await fetch(redirectUrl, {
-          method: "GET",
-          redirect: "follow",
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000 + (attempt - 1) * 15000);
+
+        const firstRes = await fetch(GOOGLE_SCRIPT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: body,
+          redirect: "manual",
           signal: controller.signal,
         });
+
+        // Handle GAS redirect
+        if (firstRes.status === 301 || firstRes.status === 302 || firstRes.status === 303) {
+          const redirectUrl = firstRes.headers.get("location");
+          if (redirectUrl) {
+            console.log(`🔄 Google Script redirect detected, following...`);
+            const secondRes = await fetch(redirectUrl, {
+              method: "GET",
+              redirect: "follow",
+              signal: controller.signal,
+            });
+            clearTimeout(timeout);
+
+            if (secondRes.ok) {
+              const result = await secondRes.json();
+              if (result.status === "success") {
+                console.log(`✅ Order metadata synced to Google Sheet: ${data.orderNumber} | GAS used sheetId: ${result.sheetId || 'unknown'} | row: ${result.row}`);
+                return { success: true, sheetRow: result.row };
+              } else {
+                console.error(`❌ Google Sheet sync failed:`, result.message);
+                return { success: false };
+              }
+            }
+            console.error(`❌ Google Sheet redirect fetch failed:`, secondRes.status);
+            return { success: false };
+          }
+        }
+
         clearTimeout(timeout);
 
-        if (secondRes.ok) {
-          const result = await secondRes.json();
+        if (firstRes.ok) {
+          const result = await firstRes.json();
           if (result.status === "success") {
-            console.log(`✅ Order metadata synced to Google Sheet: ${data.orderNumber} | GAS used sheetId: ${result.sheetId || 'unknown'} | row: ${result.row}`);
+            console.log(`✅ Order metadata synced to Google Sheet: ${data.orderNumber}`);
             return { success: true, sheetRow: result.row };
           } else {
             console.error(`❌ Google Sheet sync failed:`, result.message);
             return { success: false };
           }
         }
-        console.error(`❌ Google Sheet redirect fetch failed:`, secondRes.status);
+
+        console.error(`❌ Google Sheet sync failed with status:`, firstRes.status);
+        return { success: false };
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        const isTimeout =
+          lastError.message.includes("abort") ||
+          lastError.message.includes("ETIMEDOUT") ||
+          lastError.message.includes("ECONNRESET") ||
+          lastError.message.includes("fetch failed");
+
+        if (isTimeout && attempt < maxRetries) {
+          const delay = attempt * 2000;
+          console.log(`⏳ Sheet sync retry ${attempt + 1}/${maxRetries} after ${delay}ms...`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          continue;
+        }
+
+        console.error(`❌ Google Sheet sync error (all retries exhausted):`, err);
         return { success: false };
       }
     }
 
-    clearTimeout(timeout);
-
-    if (firstRes.ok) {
-      const result = await firstRes.json();
-      if (result.status === "success") {
-        console.log(`✅ Order metadata synced to Google Sheet: ${data.orderNumber}`);
-        return { success: true, sheetRow: result.row };
-      } else {
-        console.error(`❌ Google Sheet sync failed:`, result.message);
-        return { success: false };
-      }
-    }
-
-    console.error(`❌ Google Sheet sync failed with status:`, firstRes.status);
     return { success: false };
   } catch (err) {
     console.error(`❌ Google Sheet sync error:`, err);
