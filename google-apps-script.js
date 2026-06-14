@@ -38,14 +38,14 @@
 // ⚠️⚠️⚠️ هام: SECRET_TOKEN يجب أن يطابق تماماً قيمة SHEET_SECRET_TOKEN
 // في ملف .env الخاص بالمشروع! إذا لم تتطابق، ستحصل على خطأ "رمز الأمان غير صالح"
 var CONFIG = {
-  // ✅ معرف شيت جوجل
-  SHEET_ID: "1-NhEn-Cg02mcPeAesfzqzmsH1bFS3hR3t791ityqOMw",
+  // ✅ معرف شيت جوجل (من الرابط: https://docs.google.com/spreadsheets/d/1qwBgC727vlxyQnrK3dXCQ5_knsEklGeL3EBK5OepmJY/edit)
+  SHEET_ID: "1qwBgC727vlxyQnrK3dXCQ5_knsEklGeL3EBK5OepmJY",
 
   // اسم الورقة داخل الشيت
   SHEET_NAME: "الطلبات",
 
-  // ✅ معرف مجلد جوجل درايف لحفظ الملفات
-  DRIVE_FOLDER_ID: "16asJMEO7sGG9kb-Rqs2amSM0i3Z4qHEA",
+  // ✅ معرف مجلد جوجل درايف (من الرابط: https://drive.google.com/drive/folders/1NStLD_GY67Cnd5I-D9BP_Ig1FPfbGjAC)
+  DRIVE_FOLDER_ID: "1NStLD_GY67Cnd5I-D9BP_Ig1FPfbGjAC",
 
   // ⚠️⚠️⚠️ هذا التوكن يجب أن يطابق SHEET_SECRET_TOKEN في ملف .env
   SECRET_TOKEN: "ffc0b9b5959d4a9149eed95327b88f02b1c6ee8b64a723d2",

@@ -26,10 +26,8 @@ import {
   StickyNote,
   CloudUpload,
   Check,
-  Copy,
-  ClipboardCheck,
-  AlertTriangle,
   FileDown,
+  AlertTriangle,
   Link2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -48,6 +46,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { calculatePrice, type PriceInput, type PriceBreakdown } from "@/lib/pricing";
+import { generateReceiptPDF } from "@/lib/generate-receipt";
 import { toast } from "sonner";
 
 // ─── Types ───────────────────────────────────────────────────
@@ -121,7 +120,7 @@ export default function OrderPage() {
   const [errorMessage, setErrorMessage] = useState("");
   const [orderNumber, setOrderNumber] = useState("");
   const [orderTotalPrice, setOrderTotalPrice] = useState<number>(0);
-  const [copied, setCopied] = useState(false);
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const printFileRef = useRef<HTMLInputElement>(null);
   const receiptFileRef = useRef<HTMLInputElement>(null);
 
@@ -218,27 +217,37 @@ export default function OrderPage() {
     [updateField]
   );
 
-  // ─── Copy Order Number ────────────────────────────────────
-  const copyOrderNumber = useCallback(async () => {
+  // ─── Download Order Receipt as PDF ────────────────────────
+  const downloadOrderPDF = useCallback(async () => {
     if (!orderNumber) return;
+    setIsGeneratingPDF(true);
+
     try {
-      await navigator.clipboard.writeText(orderNumber);
-      setCopied(true);
-      toast.success("تم نسخ رقم الطلب!");
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // fallback
-      const textArea = document.createElement("textarea");
-      textArea.value = orderNumber;
-      document.body.appendChild(textArea);
-      textArea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textArea);
-      setCopied(true);
-      toast.success("تم نسخ رقم الطلب!");
-      setTimeout(() => setCopied(false), 2000);
+      await generateReceiptPDF({
+        orderNumber,
+        fullName: form.fullName,
+        phone: form.phone,
+        pageCount: form.pageCount,
+        paperSize: form.paperSize,
+        printSide: form.printSide,
+        copies: form.copies,
+        colorType: form.colorType,
+        bindingType: form.bindingType,
+        payMethod: form.payMethod,
+        deliveryMethod: form.deliveryMethod,
+        address: form.address,
+        notes: form.notes,
+        totalPrice: orderTotalPrice,
+        printFileName: form.printFile?.name || null,
+      });
+      toast.success("تم تنزيل إيصال PDF!");
+    } catch (err) {
+      console.error("PDF generation error:", err);
+      toast.error("حدث خطأ في إنشاء الإيصال");
+    } finally {
+      setIsGeneratingPDF(false);
     }
-  }, [orderNumber]);
+  }, [orderNumber, form, orderTotalPrice]);
 
   // ─── Submit with multi-step progress ──────────────────────
   const handleSubmit = useCallback(async () => {
@@ -387,7 +396,6 @@ export default function OrderPage() {
     setErrorDialog(false);
     setOrderNumber("");
     setOrderTotalPrice(0);
-    setCopied(false);
     setUploadProgress(null);
     if (printFileRef.current) printFileRef.current.value = "";
     if (receiptFileRef.current) receiptFileRef.current.value = "";
@@ -658,26 +666,22 @@ export default function OrderPage() {
             </div>
           )}
 
-          {/* Action Buttons: Copy / PDF + Copy Link */}
+          {/* Action Buttons: Download + Copy Link */}
           {orderNumber && (
             <div className="grid grid-cols-2 gap-3 mt-4">
               <Button
                 type="button"
                 variant="outline"
-                onClick={copyOrderNumber}
+                onClick={downloadOrderPDF}
+                disabled={isGeneratingPDF}
                 className="h-11 rounded-xl border-emerald-200 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 gap-2 text-sm font-bold"
               >
-                {copied ? (
-                  <>
-                    <ClipboardCheck className="w-4 h-4 text-emerald-600" />
-                    <span className="text-emerald-600">تم النسخ!</span>
-                  </>
+                {isGeneratingPDF ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
-                  <>
-                    <FileDown className="w-4 h-4" />
-                    نسخ / PDF
-                  </>
+                  <FileDown className="w-4 h-4" />
                 )}
+                {isGeneratingPDF ? "جاري الإنشاء..." : "نسخ / PDF"}
               </Button>
               <Button
                 type="button"
