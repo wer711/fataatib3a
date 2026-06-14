@@ -535,22 +535,22 @@ export default function OrderPage() {
           <div className="absolute bottom-0 right-20 w-48 h-48 rounded-full bg-white/10 blur-3xl" />
           <div className="absolute top-10 right-1/3 w-24 h-24 rounded-full bg-white/15 blur-2xl" />
         </div>
-        <div className="relative max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
+        <div className="relative max-w-5xl mx-auto px-3 sm:px-6 py-6 sm:py-10">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6 }}
             className="text-center"
           >
-            <div className="inline-flex items-center gap-2 mb-4">
-              <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-white/20 backdrop-blur-sm flex items-center justify-center">
-                <Printer className="w-7 h-7 sm:w-8 sm:h-8 text-white" />
+            <div className="inline-flex items-center gap-2 mb-3 sm:mb-4">
+              <div className="w-10 h-10 sm:w-14 sm:h-14 rounded-xl sm:rounded-2xl bg-white/20 backdrop-blur-sm flex items-center justify-center">
+                <Printer className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
               </div>
-              <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold text-white">
+              <h1 className="text-2xl sm:text-4xl lg:text-5xl font-extrabold text-white leading-tight">
                 فضاء الطباعة الرقمية
               </h1>
             </div>
-            <p className="text-base sm:text-lg text-emerald-100 max-w-2xl mx-auto leading-relaxed">
+            <p className="text-sm sm:text-base lg:text-lg text-emerald-100 max-w-2xl mx-auto leading-relaxed px-2">
               أرسل تفاصيل طلبك بسهولة واختر جميع خيارات الطباعة والتغليف والدفع.
               سيتم حساب السعر تلقائياً وحفظ طلبك مباشرةً وسنتواصل معك فوراً.
             </p>
@@ -559,15 +559,15 @@ export default function OrderPage() {
       </header>
 
       {/* ── Main Content ──────────────────────────────────── */}
-      <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-10">
+      <main className="flex-1 max-w-5xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-10">
         {/* Step Indicator */}
         <StepIndicator steps={STEPS} currentStep={currentStep} />
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 mt-4 sm:mt-6">
           {/* Form Area */}
           <div className="lg:col-span-2">
             <Card className="border-0 shadow-xl shadow-slate-200/50 dark:shadow-none dark:border dark:border-slate-800 rounded-2xl overflow-hidden">
-              <CardContent className="p-5 sm:p-8">
+              <CardContent className="p-3 sm:p-5 lg:p-8">
                 <AnimatePresence mode="wait" custom={direction}>
                   <motion.div
                     key={currentStep}
@@ -893,7 +893,7 @@ export default function OrderPage() {
 // ─── Step Indicator ────────────────────────────────────────
 function StepIndicator({ steps, currentStep }: { steps: typeof STEPS; currentStep: number }) {
   return (
-    <div className="flex items-center justify-center gap-2 sm:gap-4">
+    <div className="flex items-center justify-center gap-1.5 sm:gap-4">
       {steps.map((step, i) => {
         const isActive = currentStep === step.id;
         const isDone = currentStep > step.id;
@@ -959,6 +959,50 @@ function SectionTitle({ icon: Icon, title }: { icon: React.ElementType; title: s
   );
 }
 
+// ─── Number Stepper (mobile-friendly + / - buttons) ──────────
+function NumberStepper({
+  value,
+  onChange,
+  min = 1,
+  max = 999,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  min?: number;
+  max?: number;
+}) {
+  return (
+    <div className="flex items-center gap-0 rounded-xl border border-input bg-background overflow-hidden h-12">
+      {/* Minus button */}
+      <button
+        type="button"
+        onClick={() => onChange(Math.max(min, value - 1))}
+        disabled={value <= min}
+        className="flex items-center justify-center w-12 h-full text-lg font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 active:bg-slate-200 dark:active:bg-slate-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed select-none flex-shrink-0"
+        aria-label="إنقاص"
+      >
+        −
+      </button>
+
+      {/* Number display */}
+      <div className="flex-1 text-center font-bold text-base tabular-nums select-none min-w-[3rem]">
+        {value}
+      </div>
+
+      {/* Plus button */}
+      <button
+        type="button"
+        onClick={() => onChange(Math.min(max, value + 1))}
+        disabled={value >= max}
+        className="flex items-center justify-center w-12 h-full text-lg font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 active:bg-slate-200 dark:active:bg-slate-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed select-none flex-shrink-0"
+        aria-label="زيادة"
+      >
+        +
+      </button>
+    </div>
+  );
+}
+
 // ─── Field Wrapper ─────────────────────────────────────────
 function FieldWrapper({
   label,
@@ -1020,7 +1064,7 @@ function OptionCard({
       whileHover={{ y: -2 }}
       whileTap={{ scale: 0.98 }}
       onClick={onChange}
-      className={`relative cursor-pointer rounded-2xl border-2 p-4 transition-all ${
+      className={`relative cursor-pointer rounded-xl sm:rounded-2xl border-2 p-3 sm:p-4 transition-all min-h-[52px] sm:min-h-0 ${
         checked
           ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 dark:border-emerald-600 shadow-md shadow-emerald-200/50 dark:shadow-none"
           : "border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-white dark:hover:bg-slate-800"
@@ -1165,7 +1209,7 @@ function FileUploadZone({
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           onClick={() => fileRef.current?.click()}
-          className={`relative border-2 border-dashed rounded-2xl p-6 sm:p-8 text-center cursor-pointer transition-all ${
+          className={`relative border-2 border-dashed rounded-xl sm:rounded-2xl p-4 sm:p-8 text-center cursor-pointer transition-all ${
             isDragging
               ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 scale-[1.02]"
               : error
@@ -1356,14 +1400,13 @@ function Step2Printing({
       </FieldWrapper>
 
       {/* Page Count, Paper Size, Print Side, Copies */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5">
         <FieldWrapper label="عدد الصفحات (تقريبي)" required error={errors.pageCount}>
-          <Input
-            type="number"
-            min={1}
+          <NumberStepper
             value={form.pageCount}
-            onChange={(e) => updateField("pageCount", parseInt(e.target.value) || 1)}
-            className="rounded-xl h-12 text-sm"
+            onChange={(v) => updateField("pageCount", v)}
+            min={1}
+            max={999}
           />
         </FieldWrapper>
 
@@ -1391,19 +1434,18 @@ function Step2Printing({
         </FieldWrapper>
 
         <FieldWrapper label="عدد النسخ">
-          <Input
-            type="number"
-            min={1}
+          <NumberStepper
             value={form.copies}
-            onChange={(e) => updateField("copies", parseInt(e.target.value) || 1)}
-            className="rounded-xl h-12 text-sm"
+            onChange={(v) => updateField("copies", v)}
+            min={1}
+            max={100}
           />
         </FieldWrapper>
       </div>
 
       {/* Color Type */}
       <FieldWrapper label="نوع الألوان" required error={errors.colorType}>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
           <OptionCard
             name="colorType"
             value="أسود وأبيض"
@@ -1427,7 +1469,7 @@ function Step2Printing({
 
       {/* Binding Type */}
       <FieldWrapper label="نوع التغليف" required error={errors.bindingType}>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
           <OptionCard
             name="bindingType"
             value="بدون تغليف"
@@ -1483,7 +1525,7 @@ function Step3Payment({
 
       {/* Payment Method */}
       <FieldWrapper label="طريقة الدفع" required error={errors.payMethod}>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
           <OptionCard
             name="payMethod"
             value="بريدي موب"
@@ -1548,7 +1590,7 @@ function Step3Payment({
 
       {/* Delivery Method */}
       <FieldWrapper label="طريقة الاستلام" required error={errors.deliveryMethod}>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
           <OptionCard
             name="deliveryMethod"
             value="استلام من المكتبة"
@@ -1627,16 +1669,16 @@ function PriceSummary({
   const hasReceipt = form.receiptFile !== null;
 
   return (
-    <Card className="border-0 shadow-xl shadow-slate-200/50 dark:shadow-none dark:border dark:border-slate-800 rounded-2xl overflow-hidden sticky top-6">
+    <Card className="border-0 shadow-xl shadow-slate-200/50 dark:shadow-none dark:border dark:border-slate-800 rounded-2xl overflow-hidden sticky top-4 sm:top-6">
       {/* Header */}
-      <div className="bg-gradient-to-l from-emerald-600 to-teal-600 dark:from-emerald-800 dark:to-teal-800 px-5 py-4">
+      <div className="bg-gradient-to-l from-emerald-600 to-teal-600 dark:from-emerald-800 dark:to-teal-800 px-4 sm:px-5 py-3 sm:py-4">
         <div className="flex items-center gap-2">
           <Package className="w-5 h-5 text-white" />
-          <h3 className="text-lg font-extrabold text-white">ملخص الطلب</h3>
+          <h3 className="text-base sm:text-lg font-extrabold text-white">ملخص الطلب</h3>
         </div>
       </div>
 
-      <CardContent className="p-5 space-y-4">
+      <CardContent className="p-4 sm:p-5 space-y-3 sm:space-y-4">
         {/* Line items */}
         <div className="space-y-2.5 text-sm">
           <div className="flex justify-between">
